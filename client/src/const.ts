@@ -1,5 +1,9 @@
 export { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 
+export const APP_TITLE = import.meta.env.VITE_APP_TITLE || "App";
+
+export const APP_LOGO = "https://files.manuscdn.com/user_upload_by_module/session_file/104102086/pvNNZkXlGeFWOKMU.png";
+
 // Generate login URL at runtime so redirect URI reflects the current origin.
 export const getLoginUrl = () => {
   const oauthPortalUrl = import.meta.env.VITE_OAUTH_PORTAL_URL;

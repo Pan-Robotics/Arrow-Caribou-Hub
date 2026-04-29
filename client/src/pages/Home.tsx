@@ -1,31 +1,195 @@
-import { useAuth } from "@/_core/hooks/useAuth";
-import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
-import { getLoginUrl } from "@/const";
-import { Streamdown } from 'streamdown';
+import { useState } from "react";
+// Caribou Hub branding
+const HUB_TITLE = "Caribou Hub";
+const HUB_SUBTITLE = "Heavy Cargo & Agriculture UAV Ground Station";
+const CARIBOU_LOGO = "https://files.manuscdn.com/user_upload_by_module/session_file/104102086/pvNNZkXlGeFWOKMU.png";
+import { Radio, Gauge, Package, Sparkles, Settings, Camera, ScrollText, Map, BarChart3 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import AppSidebar, { App } from "@/components/AppSidebar";
+import LidarApp from "@/components/apps/LidarApp";
+import TelemetryApp from "@/components/apps/TelemetryApp";
+import CameraFeedApp from "@/components/apps/CameraFeedApp";
+import DroneConfig from "@/pages/DroneConfig";
+import AppStore from "@/components/apps/AppStore";
+import AppRenderer from "@/components/apps/AppRenderer";
+import AppManagement from "@/pages/AppManagement";
+import FlightAnalyticsApp from "@/components/apps/FlightAnalyticsApp";
+import LogsOtaApp from "@/components/apps/LogsOtaApp";
+import { trpc } from "@/lib/trpc";
 
-/**
- * All content in this page are only for example, replace with your own feature implementation
- * When building pages, remember your instructions in Frontend Workflow, Frontend Best Practices, Design Guide and Common Pitfalls
- */
 export default function Home() {
-  // The userAuth hooks provides authentication state
-  // To implement login/logout functionality, simply call logout() or redirect to getLoginUrl()
-  let { user, loading, error, isAuthenticated, logout } = useAuth();
+  const [activeAppId, setActiveAppId] = useState<string>("lidar");
+  const [showAppStore, setShowAppStore] = useState(false);
+  const [showAppManagement, setShowAppManagement] = useState(false);
+  const [editingAppId, setEditingAppId] = useState<string | null>(null);
+  
+  // Load installed apps (both custom and built-in)
+  const { data: installedApps } = trpc.appBuilder.getUserApps.useQuery();
 
-  // If theme is switchable in App.tsx, we can implement theme toggling like this:
-  // const { theme, toggleTheme } = useTheme();
+  // Define built-in app metadata (apps that can be installed/uninstalled)
+  const builtInAppMetadata: Record<string, { name: string; icon: React.ElementType<{ size?: number }> }> = {
+    telemetry: { name: "Flight Telemetry", icon: Gauge },
+    camera: { name: "Camera Feed", icon: Camera },
+    "logs-ota": { name: "Logs & OTA Updates", icon: ScrollText },
+    mission: { name: "Mission Planner", icon: Map },
+    analytics: { name: "Flight Analytics", icon: BarChart3 },
+  };
+
+  // Get list of installed app IDs
+  const installedAppIds = new Set((installedApps || []).map(app => app.appId));
+
+  // Core apps that are always visible (not uninstallable)
+  const coreApps: App[] = [
+    {
+      id: "lidar",
+      name: "RPLidar Terrain Mapping",
+      icon: Radio,
+      enabled: true,
+    },
+  ];
+
+  // Bottom-pinned apps (shown just above the + button)
+  const bottomApps: App[] = [
+    {
+      id: "drone-config",
+      name: "Drone Configuration",
+      icon: Settings,
+      enabled: true,
+    },
+  ];
+
+  // Built-in apps that are installable/uninstallable (only show if installed)
+  const installedBuiltInApps: App[] = Object.entries(builtInAppMetadata)
+    .filter(([appId]) => installedAppIds.has(appId))
+    .map(([appId, meta]) => ({
+      id: appId,
+      name: meta.name,
+      icon: meta.icon,
+      enabled: true,
+    }));
+
+  // Custom apps (filter out built-in apps)
+  const installedCustomApps: App[] = (installedApps || [])
+    .filter(app => !builtInAppMetadata[app.appId])
+    .map(app => ({
+      id: `custom-${app.appId}`,
+      name: app.name,
+      icon: Sparkles,
+      enabled: true,
+    }));
+
+  // Combine all apps: core + installed built-in + installed custom
+  const apps: App[] = [...coreApps, ...installedBuiltInApps, ...installedCustomApps];
+
+  const handleAddApp = () => {
+    setShowAppStore(true);
+  };
+
+  const renderApp = () => {
+    if (showAppStore) {
+      return <AppStore 
+        onInstallApp={() => setShowAppStore(false)} 
+        onManageApps={() => {
+          setShowAppStore(false);
+          setShowAppManagement(true);
+        }}
+        editingAppId={editingAppId}
+        onCloseEdit={() => setEditingAppId(null)}
+      />;
+    }
+
+    if (showAppManagement) {
+      return <AppManagement 
+        onGoToStore={() => {
+          setShowAppManagement(false);
+          setShowAppStore(true);
+        }}
+        onEditApp={(appId) => {
+          setEditingAppId(appId);
+          setShowAppManagement(false);
+          setShowAppStore(true);
+        }}
+      />;
+    }
+
+    // Check if it's a custom app
+    if (activeAppId.startsWith('custom-')) {
+      const appId = activeAppId.replace('custom-', '');
+      return <AppRenderer appId={appId} />;
+    }
+
+    switch (activeAppId) {
+      case "lidar":
+        return <LidarApp />;
+      case "camera":
+        return <CameraFeedApp />;
+      case "telemetry":
+        return <TelemetryApp />;
+      case "drone-config":
+        return <DroneConfig />;
+      case "logs-ota":
+        return <LogsOtaApp />;
+      case "mission":
+        return (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center">
+              <Map className="mx-auto mb-4 text-muted-foreground" size={64} />
+              <h2 className="text-2xl font-semibold mb-2">Mission Planner</h2>
+              <p className="text-muted-foreground mb-1">Plan and execute autonomous flight missions with waypoints, geofencing, and return-to-home.</p>
+              <Badge variant="secondary" className="mt-3">Coming Soon</Badge>
+            </div>
+          </div>
+        );
+      case "analytics":
+        return <FlightAnalyticsApp />;
+      default:
+        return (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center">
+              <Package className="mx-auto mb-4 text-muted-foreground" size={64} />
+              <h2 className="text-2xl font-semibold mb-2">App Not Available</h2>
+              <p className="text-muted-foreground">This app is coming soon.</p>
+            </div>
+          </div>
+        );
+    }
+  };
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <main>
-        {/* Example: lucide-react for icons */}
-        <Loader2 className="animate-spin" />
-        Example Page
-        {/* Example: Streamdown for markdown rendering */}
-        <Streamdown>Any **markdown** content</Streamdown>
-        <Button variant="default">Example Button</Button>
-      </main>
+    <div className="min-h-screen bg-background">
+      {/* Sidebar */}
+      <AppSidebar
+        apps={apps}
+        bottomApps={bottomApps}
+        activeAppId={showAppStore ? "store" : activeAppId}
+        onAppChange={(appId) => {
+          setShowAppStore(false);
+          setShowAppManagement(false);
+          setActiveAppId(appId);
+        }}
+        onAddApp={handleAddApp}
+      />
+
+      {/* Main Content Area (with left margin for sidebar) */}
+      <div className="ml-16 min-h-screen flex flex-col">
+        {/* Global Header */}
+        <header className="border-b border-border bg-card">
+          <div className="px-6 py-4">
+            <div className="flex items-center gap-3">
+              <img src={CARIBOU_LOGO} alt="Caribou Hub" className="h-8 w-8 object-contain" />
+              <div>
+                <h1 className="text-xl font-bold">{HUB_TITLE}</h1>
+                <p className="text-xs text-muted-foreground">{HUB_SUBTITLE}</p>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* App Content */}
+        <main className="flex-1">
+          {renderApp()}
+        </main>
+      </div>
     </div>
   );
 }

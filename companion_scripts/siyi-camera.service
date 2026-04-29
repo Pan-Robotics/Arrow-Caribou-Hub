@@ -1,0 +1,24 @@
+[Unit]
+Description=SIYI A8 Mini Camera Controller Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=julius
+WorkingDirectory=/home/julius/camera_forwarder
+ExecStart=/usr/bin/python3 /home/julius/camera_forwarder/siyi_camera_controller.py \
+    --hub-url HUB_URL_HERE \
+    --drone-id DRONE_ID_HERE \
+    --api-key API_KEY_HERE
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=siyi-camera
+
+[Install]
+WantedBy=multi-user.target

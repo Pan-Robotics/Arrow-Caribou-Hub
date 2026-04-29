@@ -1,0 +1,25 @@
+[Unit]
+Description=Camera Stream Manager (go2rtc + Tailscale + Hub Registration)
+After=network-online.target go2rtc.service tailscale-funnel.service
+Wants=network-online.target
+Requires=go2rtc.service
+
+[Service]
+Type=simple
+User=julius
+WorkingDirectory=/home/julius/camera_forwarder
+ExecStart=/usr/bin/python3 /home/julius/camera_forwarder/camera_stream_service.py \
+    --stream sub \
+    --hub-url https://3000-ibdfcmi4gyx1dwxpfvh97-4b23ff60.us1.manus.computer \
+    --drone-id caribou_001 \
+    --api-key sp10G8P9XCXUBidys1KJaoeCSxOFLUo5E1CDhc9L85M \
+    --go2rtc-api http://localhost:1984
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=camera-stream
+
+[Install]
+WantedBy=multi-user.target

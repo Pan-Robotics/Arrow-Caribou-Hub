@@ -1,97 +1,202 @@
 // Preconfigured storage helpers for Manus WebDev templates
-// Uploads via Forge Server presigned URL to S3 (PUT direct).
-// Downloads return /manus-storage/{key} paths served via 307 redirect.
+// Uses the Biz-provided storage proxy (Authorization: Bearer <token>)
 
-import { ENV } from "./_core/env";
+import { ENV } from './_core/env';
+import FormData from 'form-data';
+import axios from 'axios';
 
-function getForgeConfig() {
-  const forgeUrl = ENV.forgeApiUrl;
-  const forgeKey = ENV.forgeApiKey;
+// Add request interceptor for debugging
+axios.interceptors.request.use(
+  (config) => {
+    if (config.url?.includes('/storage/')) {
+      console.log('[Storage Request]', {
+        method: config.method,
+        url: config.url,
+        hasAuth: !!config.headers?.Authorization,
+        authPrefix: config.headers?.Authorization?.toString().substring(0, 20) + '...',
+        contentType: config.headers?.['Content-Type'],
+      });
+    }
+    return config;
+  },
+  (error) => {
+    console.error('[Storage Request Error]', error);
+    return Promise.reject(error);
+  }
+);
 
-  if (!forgeUrl || !forgeKey) {
+// Add response interceptor for debugging
+axios.interceptors.response.use(
+  (response) => {
+    if (response.config.url?.includes('/storage/')) {
+      console.log('[Storage Response]', {
+        status: response.status,
+        statusText: response.statusText,
+        url: response.config.url,
+      });
+    }
+    return response;
+  },
+  (error) => {
+    if (error.config?.url?.includes('/storage/')) {
+      console.error('[Storage Response Error]', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        url: error.config?.url,
+        data: error.response?.data,
+      });
+    }
+    return Promise.reject(error);
+  }
+);
+
+type StorageConfig = { baseUrl: string; apiKey: string };
+
+function getStorageConfig(): StorageConfig {
+  const baseUrl = ENV.forgeApiUrl;
+  const apiKey = ENV.forgeApiKey;
+
+  if (!baseUrl || !apiKey) {
     throw new Error(
-      "Storage config missing: set BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY",
+      "Storage proxy credentials missing: set BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY"
     );
   }
 
-  return { forgeUrl: forgeUrl.replace(/\/+$/, ""), forgeKey };
+  return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey };
+}
+
+function buildUploadUrl(baseUrl: string, relKey: string): URL {
+  const url = new URL("v1/storage/upload", ensureTrailingSlash(baseUrl));
+  url.searchParams.set("path", normalizeKey(relKey));
+  return url;
+}
+
+async function buildDownloadUrl(
+  baseUrl: string,
+  relKey: string,
+  apiKey: string
+): Promise<string> {
+  const downloadApiUrl = new URL(
+    "v1/storage/downloadUrl",
+    ensureTrailingSlash(baseUrl)
+  );
+  downloadApiUrl.searchParams.set("path", normalizeKey(relKey));
+  const response = await fetch(downloadApiUrl, {
+    method: "GET",
+    headers: buildAuthHeaders(apiKey),
+  });
+  return (await response.json()).url;
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value : `${value}/`;
 }
 
 function normalizeKey(relKey: string): string {
   return relKey.replace(/^\/+/, "");
 }
 
-function appendHashSuffix(relKey: string): string {
-  const hash = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
-  const lastDot = relKey.lastIndexOf(".");
-  if (lastDot === -1) return `${relKey}_${hash}`;
-  return `${relKey.slice(0, lastDot)}_${hash}${relKey.slice(lastDot)}`;
+function toFormData(
+  data: Buffer | Uint8Array | string,
+  contentType: string,
+  fileName: string
+): FormData {
+  const form = new FormData();
+  const buffer = typeof data === "string" ? Buffer.from(data) : Buffer.from(data);
+  form.append("file", buffer, {
+    filename: fileName || "file",
+    contentType: contentType,
+  });
+  return form;
+}
+
+function buildAuthHeaders(apiKey: string): HeadersInit {
+  return { Authorization: `Bearer ${apiKey}` };
 }
 
 export async function storagePut(
   relKey: string,
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream",
+  maxRetries = 3
 ): Promise<{ key: string; url: string }> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
-  const key = appendHashSuffix(normalizeKey(relKey));
+  const { baseUrl, apiKey } = getStorageConfig();
+  const key = normalizeKey(relKey);
+  const uploadUrl = buildUploadUrl(baseUrl, key);
+  const formData = toFormData(data, contentType, key.split("/").pop() ?? key);
 
-  // 1. Get presigned PUT URL from Forge
-  const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
-  presignUrl.searchParams.set("path", key);
-
-  const presignResp = await fetch(presignUrl, {
-    headers: { Authorization: `Bearer ${forgeKey}` },
+  console.log('[Storage] Upload attempt:', {
+    url: uploadUrl.toString(),
+    key,
+    contentType,
+    dataSize: Buffer.byteLength(typeof data === 'string' ? data : Buffer.from(data)),
+    hasApiKey: !!apiKey,
+    apiKeyPrefix: apiKey.substring(0, 10) + '...',
   });
 
-  if (!presignResp.ok) {
-    const msg = await presignResp.text().catch(() => presignResp.statusText);
-    throw new Error(`Storage presign failed (${presignResp.status}): ${msg}`);
+  let lastError: any;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await axios.post(uploadUrl.toString(), formData, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          ...formData.getHeaders(),
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+        timeout: 30000, // 30 second timeout
+      });
+
+      const url = response.data.url;
+      console.log('[Storage] Upload successful:', { key, url, attempt });
+      return { key, url };
+    } catch (error: any) {
+      lastError = error;
+      const status = error.response?.status || 500;
+      const statusText = error.response?.statusText || 'Unknown Error';
+      const message = error.response?.data ? 
+        (typeof error.response.data === 'string' ? error.response.data : JSON.stringify(error.response.data)) :
+        error.message;
+      
+      console.error(`[Storage] Upload failed (attempt ${attempt}/${maxRetries}):`, {
+        status,
+        statusText,
+        url: uploadUrl.toString(),
+        message: message.substring(0, 500),
+      });
+      
+      // Don't retry on client errors (4xx) except 408 (timeout) and 429 (rate limit)
+      if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
+        break;
+      }
+      
+      // Wait before retrying (exponential backoff)
+      if (attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        console.log(`[Storage] Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
   }
-
-  const { url: s3Url } = (await presignResp.json()) as { url: string };
-  if (!s3Url) throw new Error("Forge returned empty presign URL");
-
-  // 2. PUT file directly to S3
-  const blob =
-    typeof data === "string"
-      ? new Blob([data], { type: contentType })
-      : new Blob([data as any], { type: contentType });
-
-  const uploadResp = await fetch(s3Url, {
-    method: "PUT",
-    headers: { "Content-Type": contentType },
-    body: blob,
-  });
-
-  if (!uploadResp.ok) {
-    throw new Error(`Storage upload to S3 failed (${uploadResp.status})`);
-  }
-
-  return { key, url: `/manus-storage/${key}` };
+  
+  // All retries failed
+  const status = lastError.response?.status || 500;
+  const statusText = lastError.response?.statusText || 'Unknown Error';
+  const message = lastError.response?.data ? 
+    (typeof lastError.response.data === 'string' ? lastError.response.data : JSON.stringify(lastError.response.data)) :
+    lastError.message;
+  
+  throw new Error(
+    `Storage upload failed after ${maxRetries} attempts (${status} ${statusText}): ${message}`
+  );
 }
 
-export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {
+export async function storageGet(relKey: string): Promise<{ key: string; url: string; }> {
+  const { baseUrl, apiKey } = getStorageConfig();
   const key = normalizeKey(relKey);
-  return { key, url: `/manus-storage/${key}` };
-}
-
-export async function storageGetSignedUrl(relKey: string): Promise<string> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
-  const key = normalizeKey(relKey);
-
-  const getUrl = new URL("v1/storage/presign/get", forgeUrl + "/");
-  getUrl.searchParams.set("path", key);
-
-  const resp = await fetch(getUrl, {
-    headers: { Authorization: `Bearer ${forgeKey}` },
-  });
-
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => resp.statusText);
-    throw new Error(`Storage signed URL failed (${resp.status}): ${msg}`);
-  }
-
-  const { url } = (await resp.json()) as { url: string };
-  return url;
+  return {
+    key,
+    url: await buildDownloadUrl(baseUrl, key, apiKey),
+  };
 }

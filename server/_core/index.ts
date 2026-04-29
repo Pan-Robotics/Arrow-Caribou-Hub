@@ -8,6 +8,9 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { initializeWebSocket } from "../websocket";
+import restApiRouter from "../rest-api";
+import { startJobReaper } from "../droneJobsDb";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -31,11 +34,20 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  
+  // Initialize WebSocket server
+  initializeWebSocket(server);
+  // Configure body parser — no practical size limit (FC logs can exceed 200MB)
+  app.use(express.json({ limit: "500mb" }));
+  app.use(express.urlencoded({ limit: "500mb", extended: true }));
+  // Parse raw text bodies (needed for SDP in WHEP proxy)
+  app.use(express.text({ type: ["application/sdp", "text/plain"], limit: "1mb" }));
+  // Storage proxy for /manus-storage/ paths
   registerStorageProxy(app);
+  // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
+  // REST API for external integrations
+  app.use("/api/rest", restApiRouter);
   // tRPC API
   app.use(
     "/api/trpc",
@@ -60,6 +72,8 @@ async function startServer() {
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
+    // Start the job reliability reaper (runs every 60s)
+    startJobReaper(60_000);
   });
 }
 
