@@ -1477,3 +1477,12 @@
 - [x] Integrate both views (structural + cockpit) into TelemetryApp with tab/toggle
 - [x] Wire views to existing WebSocket telemetry data stream
 - [x] Test with demo mode data
+
+## Structural View — Accurate Caribou Geometry
+- [x] Redesign SVG to match actual Caribou top-down photo (rotated 90° CW)
+- [x] Rectangular central battery cage oriented vertically (not circular hub)
+- [x] 6 arms at true asymmetric angles (top/bottom straight, 4 side arms at ~45° from cage corners)
+- [x] Orange arms with black motor hubs and tri-blade propellers
+- [x] 6 batteries visible inside the rectangular cage
+- [x] Green square in center representing flight controller
+- [x] Maintain per-arm data overlays (RPM, ESC temp, battery SoC, voltage, current)
