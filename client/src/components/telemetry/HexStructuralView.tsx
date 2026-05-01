@@ -302,21 +302,6 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           );
         })}
 
-        {/* ===== FLIGHT CONTROLLER (green square in center) ===== */}
-        <rect
-          x={cx - 28}
-          y={cy - 28}
-          width="56"
-          height="56"
-          rx="6"
-          fill="#166534"
-          stroke="#22c55e"
-          strokeWidth="2"
-          opacity="0.9"
-        />
-        <text x={cx} y={cy + 5} textAnchor="middle" fill="#86efac" fontSize="12" fontFamily="monospace" fontWeight="bold">
-          FC
-        </text>
 
         {/* ===== MOTOR NODES with propellers and data overlays ===== */}
         {motorPositions.map((pos, i) => {
