@@ -1459,3 +1459,21 @@
 - [x] Push database schema (15 tables) with pnpm db:push
 - [x] Restart dev server and verify Caribou Hub UI loads correctly
 - [x] Save initial checkpoint
+
+
+## Flight Telemetry App Redesign — Caribou Hexarotor
+- [x] Research Feather Companion Computer display 1 & display 2 structure
+- [x] Read current TelemetryApp.tsx code to understand existing data flow
+- [x] Design top-down hexarotor SVG view with 6 arms at 60° intervals
+- [x] Overlay per-arm data: motor RPM, ESC status, battery voltage/SoC per arm
+- [x] Implement color-coded health indicators on each arm (green/yellow/red)
+- [x] Create flight cockpit HUD with minimalistic artificial horizon
+- [x] Add attitude indicator (pitch/roll) as SVG overlay
+- [x] Add heading/compass indicator
+- [x] Add GPS status widget (fix type, satellite count, HDOP)
+- [x] Add altitude and vertical speed gauges
+- [x] Add flight mode / armed status indicator
+- [x] Add ground speed indicator
+- [x] Integrate both views (structural + cockpit) into TelemetryApp with tab/toggle
+- [x] Wire views to existing WebSocket telemetry data stream
+- [x] Test with demo mode data

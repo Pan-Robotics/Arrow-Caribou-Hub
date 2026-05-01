@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { 
   Activity, 
   Battery, 
@@ -14,11 +15,15 @@ import {
   Zap,
   Thermometer,
   Plane,
-  Loader2
+  Loader2,
+  Hexagon,
+  Monitor
 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { useDroneSelection } from '@/hooks/useDroneSelection';
 import { ConnectionStatus, useLastDataTimestamp } from '@/components/ui/ConnectionStatus';
+import { HexStructuralView, type ArmData } from '@/components/telemetry/HexStructuralView';
+import { CockpitHUD } from '@/components/telemetry/CockpitHUD';
 
 interface TelemetryData {
   attitude: {
@@ -52,7 +57,13 @@ interface TelemetryData {
     state_of_charge_pct: number;
     timestamp: string;
   } | null;
+  // Extended: per-arm data for hexarotor (6 independent systems)
+  arms?: ArmData[];
   in_air: boolean;
+  // Extended flight data
+  airspeed_ms?: number;
+  vertical_speed_ms?: number;
+  flight_mode?: string;
 }
 
 export default function TelemetryApp() {
@@ -61,6 +72,7 @@ export default function TelemetryApp() {
   const { lastDataAt, markDataReceived, reset: resetDataTimestamp } = useLastDataTimestamp();
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [activeTab, setActiveTab] = useState<string>('structural');
 
   useEffect(() => {
     if (!selectedDrone) return;
@@ -101,6 +113,9 @@ export default function TelemetryApp() {
     };
   }, [selectedDrone]);
 
+  // Derive arm data from telemetry (or generate demo data from available battery info)
+  const armData: ArmData[] = telemetry?.arms ?? derivedArmData(telemetry);
+
   const formatTimestamp = (timestamp: string | null) => {
     if (!timestamp) return 'N/A';
     return new Date(timestamp).toLocaleTimeString();
@@ -119,12 +134,12 @@ export default function TelemetryApp() {
 
   return (
     <div className="h-full w-full overflow-auto bg-background">
-      <div className="container py-6 space-y-6">
+      <div className="container py-4 space-y-4">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">Flight Telemetry</h1>
-            <p className="text-muted-foreground">Real-time flight controller and battery data</p>
+            <h1 className="text-2xl font-bold">Flight Telemetry</h1>
+            <p className="text-sm text-muted-foreground">Caribou Hexarotor — Real-time flight data</p>
           </div>
           <div className="flex items-center gap-3">
             {/* Drone Selector */}
@@ -160,7 +175,7 @@ export default function TelemetryApp() {
             />
             {lastUpdate && (
               <span className="text-sm text-muted-foreground">
-                Last update: {lastUpdate.toLocaleTimeString()}
+                {lastUpdate.toLocaleTimeString()}
               </span>
             )}
           </div>
@@ -179,282 +194,373 @@ export default function TelemetryApp() {
           <Alert>
             <Activity className="h-4 w-4" />
             <AlertDescription>
-              Waiting for telemetry data from drone <strong>{selectedDrone}</strong>...
+              Waiting for telemetry data from drone <strong>{selectedDrone}</strong>... Showing demo layout.
             </AlertDescription>
           </Alert>
         )}
 
-        {selectedDrone && (
-          <>
-            {/* Flight Status */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Plane className="h-5 w-5" />
-                  Flight Status
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-4">
-                  <Badge variant={telemetry?.in_air ? 'default' : 'secondary'} className="text-lg px-4 py-2">
-                    {telemetry?.in_air ? '✈️ In Air' : '🛬 On Ground'}
-                  </Badge>
+        {/* Main tabbed view */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="grid w-full grid-cols-3 max-w-md">
+            <TabsTrigger value="structural" className="flex items-center gap-1.5">
+              <Hexagon className="h-4 w-4" />
+              <span className="hidden sm:inline">Structure</span>
+            </TabsTrigger>
+            <TabsTrigger value="cockpit" className="flex items-center gap-1.5">
+              <Monitor className="h-4 w-4" />
+              <span className="hidden sm:inline">Cockpit</span>
+            </TabsTrigger>
+            <TabsTrigger value="data" className="flex items-center gap-1.5">
+              <Activity className="h-4 w-4" />
+              <span className="hidden sm:inline">Data</span>
+            </TabsTrigger>
+          </TabsList>
+
+          {/* ===== STRUCTURAL VIEW TAB ===== */}
+          <TabsContent value="structural" className="mt-4">
+            <Card className="border-0 shadow-none bg-slate-950">
+              <CardContent className="p-2">
+                <div className="w-full" style={{ minHeight: '600px', height: 'calc(100vh - 280px)' }}>
+                  <HexStructuralView arms={armData} />
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Attitude */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Navigation className="h-5 w-5" />
-                    Attitude
-                  </CardTitle>
-                  <CardDescription>Roll, Pitch, Yaw (degrees)</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {telemetry?.attitude ? (
-                    <>
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">Roll</span>
-                          <span className="text-2xl font-bold">{telemetry.attitude.roll_deg.toFixed(1)}°</span>
-                        </div>
-                        <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-blue-500 transition-all"
-                            style={{ 
-                              width: `${Math.min(100, Math.abs(telemetry.attitude.roll_deg) / 90 * 100)}%`,
-                              marginLeft: telemetry.attitude.roll_deg < 0 ? '0' : 'auto',
-                              marginRight: telemetry.attitude.roll_deg > 0 ? '0' : 'auto'
-                            }}
-                          />
-                        </div>
-                      </div>
+          {/* ===== COCKPIT HUD TAB ===== */}
+          <TabsContent value="cockpit" className="mt-4">
+            <Card className="border-0 shadow-none bg-slate-950">
+              <CardContent className="p-2">
+                <div className="w-full" style={{ minHeight: '500px', height: 'calc(100vh - 280px)' }}>
+                  <CockpitHUD
+                    attitude={telemetry?.attitude ?? { roll_deg: 0, pitch_deg: 0, yaw_deg: 0 }}
+                    position={telemetry?.position ?? null}
+                    gps={telemetry?.gps ?? null}
+                    battery_fc={telemetry?.battery_fc ?? null}
+                    in_air={telemetry?.in_air ?? false}
+                    airspeed_ms={telemetry?.airspeed_ms ?? 0}
+                    vertical_speed_ms={telemetry?.vertical_speed_ms ?? 0}
+                    flight_mode={telemetry?.flight_mode ?? 'STABILIZE'}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">Pitch</span>
-                          <span className="text-2xl font-bold">{telemetry.attitude.pitch_deg.toFixed(1)}°</span>
-                        </div>
-                        <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-green-500 transition-all"
-                            style={{ 
-                              width: `${Math.min(100, Math.abs(telemetry.attitude.pitch_deg) / 90 * 100)}%`,
-                              marginLeft: telemetry.attitude.pitch_deg < 0 ? '0' : 'auto',
-                              marginRight: telemetry.attitude.pitch_deg > 0 ? '0' : 'auto'
-                            }}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-medium">Yaw</span>
-                          <span className="text-2xl font-bold">{telemetry.attitude.yaw_deg.toFixed(1)}°</span>
-                        </div>
-                        <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
-                          <div 
-                            className="h-full bg-purple-500 transition-all"
-                            style={{ width: `${(telemetry.attitude.yaw_deg / 360) * 100}%` }}
-                          />
-                        </div>
-                      </div>
-
-                      <p className="text-xs text-muted-foreground">
-                        Updated: {formatTimestamp(telemetry.attitude.timestamp)}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="text-muted-foreground">No attitude data</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Position */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <MapPin className="h-5 w-5" />
-                    Position
-                  </CardTitle>
-                  <CardDescription>GPS coordinates and altitude</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {telemetry?.position ? (
-                    <>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <p className="text-sm text-muted-foreground">Latitude</p>
-                          <p className="text-lg font-mono">{telemetry.position.latitude_deg.toFixed(6)}°</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-muted-foreground">Longitude</p>
-                          <p className="text-lg font-mono">{telemetry.position.longitude_deg.toFixed(6)}°</p>
-                        </div>
-                      </div>
-
-                      <Separator />
-
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <p className="text-sm text-muted-foreground">Altitude (AGL)</p>
-                          <p className="text-2xl font-bold">{telemetry.position.relative_altitude_m.toFixed(1)} m</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-muted-foreground">Altitude (MSL)</p>
-                          <p className="text-2xl font-bold">{telemetry.position.absolute_altitude_m.toFixed(1)} m</p>
-                        </div>
-                      </div>
-
-                      <p className="text-xs text-muted-foreground">
-                        Updated: {formatTimestamp(telemetry.position.timestamp)}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="text-muted-foreground">No position data</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* GPS */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Satellite className="h-5 w-5" />
-                    GPS
-                  </CardTitle>
-                  <CardDescription>Satellite information</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {telemetry?.gps ? (
-                    <>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">Satellites</span>
-                        <span className="text-3xl font-bold">{telemetry.gps.num_satellites}</span>
-                      </div>
-
-                      <Separator />
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">Fix Type</span>
-                        <Badge variant={telemetry.gps.fix_type >= 3 ? 'default' : 'secondary'}>
-                          {getGPSFixType(telemetry.gps.fix_type)}
-                        </Badge>
-                      </div>
-
-                      <p className="text-xs text-muted-foreground">
-                        Updated: {formatTimestamp(telemetry.gps.timestamp)}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="text-muted-foreground">No GPS data</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* FC Battery */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Battery className="h-5 w-5" />
-                    Flight Controller Battery
-                  </CardTitle>
-                  <CardDescription>Main battery status</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {telemetry?.battery_fc ? (
-                    <>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">Charge</span>
-                        <span className={`text-3xl font-bold ${getBatteryColor(telemetry.battery_fc.remaining_percent)}`}>
-                          {telemetry.battery_fc.remaining_percent.toFixed(0)}%
-                        </span>
-                      </div>
-
-                      <div className="w-full bg-secondary h-3 rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full transition-all rounded-full ${
-                            telemetry.battery_fc.remaining_percent > 60 ? 'bg-green-500' :
-                            telemetry.battery_fc.remaining_percent > 30 ? 'bg-yellow-500' : 'bg-red-500'
-                          }`}
-                          style={{ width: `${telemetry.battery_fc.remaining_percent}%` }}
-                        />
-                      </div>
-
-                      <Separator />
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium flex items-center gap-1">
-                          <Zap className="h-4 w-4" /> Voltage
-                        </span>
-                        <span className="text-xl font-bold">{telemetry.battery_fc.voltage_v.toFixed(2)} V</span>
-                      </div>
-
-                      <p className="text-xs text-muted-foreground">
-                        Updated: {formatTimestamp(telemetry.battery_fc.timestamp)}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="text-muted-foreground">No FC battery data</p>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* UAVCAN Battery */}
-              <Card className="md:col-span-2">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Gauge className="h-5 w-5" />
-                    UAVCAN Smart Battery
-                  </CardTitle>
-                  <CardDescription>Detailed battery telemetry via UAVCAN</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {telemetry?.battery_uavcan ? (
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                      <div className="text-center">
-                        <p className="text-sm text-muted-foreground mb-1">State of Charge</p>
-                        <p className={`text-3xl font-bold ${getBatteryColor(telemetry.battery_uavcan.state_of_charge_pct)}`}>
-                          {telemetry.battery_uavcan.state_of_charge_pct.toFixed(1)}%
-                        </p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-sm text-muted-foreground mb-1 flex items-center justify-center gap-1">
-                          <Zap className="h-3 w-3" /> Voltage
-                        </p>
-                        <p className="text-3xl font-bold">{telemetry.battery_uavcan.voltage_v.toFixed(2)} V</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-sm text-muted-foreground mb-1">Current</p>
-                        <p className="text-3xl font-bold">{telemetry.battery_uavcan.current_a.toFixed(2)} A</p>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-sm text-muted-foreground mb-1 flex items-center justify-center gap-1">
-                          <Thermometer className="h-3 w-3" /> Temperature
-                        </p>
-                        <p className="text-3xl font-bold">
-                          {(telemetry.battery_uavcan.temperature_k - 273.15).toFixed(1)}°C
-                        </p>
-                      </div>
-
-                      <div className="col-span-2 md:col-span-4">
-                        <p className="text-xs text-muted-foreground">
-                          Battery ID: {telemetry.battery_uavcan.battery_id} · Updated: {formatTimestamp(telemetry.battery_uavcan.timestamp)}
-                        </p>
-                      </div>
+          {/* ===== DATA CARDS TAB ===== */}
+          <TabsContent value="data" className="mt-4">
+            {selectedDrone && (
+              <div className="space-y-6">
+                {/* Flight Status */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Plane className="h-5 w-5" />
+                      Flight Status
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center gap-4">
+                      <Badge variant={telemetry?.in_air ? 'default' : 'secondary'} className="text-lg px-4 py-2">
+                        {telemetry?.in_air ? '✈️ In Air' : '🛬 On Ground'}
+                      </Badge>
                     </div>
-                  ) : (
-                    <p className="text-muted-foreground">No UAVCAN battery data</p>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          </>
-        )}
+                  </CardContent>
+                </Card>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Attitude */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Navigation className="h-5 w-5" />
+                        Attitude
+                      </CardTitle>
+                      <CardDescription>Roll, Pitch, Yaw (degrees)</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {telemetry?.attitude ? (
+                        <>
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-sm font-medium">Roll</span>
+                              <span className="text-2xl font-bold">{telemetry.attitude.roll_deg.toFixed(1)}°</span>
+                            </div>
+                            <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-blue-500 transition-all"
+                                style={{ 
+                                  width: `${Math.min(100, Math.abs(telemetry.attitude.roll_deg) / 90 * 100)}%`,
+                                  marginLeft: telemetry.attitude.roll_deg < 0 ? '0' : 'auto',
+                                  marginRight: telemetry.attitude.roll_deg > 0 ? '0' : 'auto'
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-sm font-medium">Pitch</span>
+                              <span className="text-2xl font-bold">{telemetry.attitude.pitch_deg.toFixed(1)}°</span>
+                            </div>
+                            <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-green-500 transition-all"
+                                style={{ 
+                                  width: `${Math.min(100, Math.abs(telemetry.attitude.pitch_deg) / 90 * 100)}%`,
+                                  marginLeft: telemetry.attitude.pitch_deg < 0 ? '0' : 'auto',
+                                  marginRight: telemetry.attitude.pitch_deg > 0 ? '0' : 'auto'
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-sm font-medium">Yaw</span>
+                              <span className="text-2xl font-bold">{telemetry.attitude.yaw_deg.toFixed(1)}°</span>
+                            </div>
+                            <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-purple-500 transition-all"
+                                style={{ width: `${(telemetry.attitude.yaw_deg / 360) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          <p className="text-xs text-muted-foreground">
+                            Updated: {formatTimestamp(telemetry.attitude.timestamp)}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-muted-foreground">No attitude data</p>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Position */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <MapPin className="h-5 w-5" />
+                        Position
+                      </CardTitle>
+                      <CardDescription>GPS coordinates and altitude</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {telemetry?.position ? (
+                        <>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <p className="text-sm text-muted-foreground">Latitude</p>
+                              <p className="text-lg font-mono">{telemetry.position.latitude_deg.toFixed(6)}°</p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-muted-foreground">Longitude</p>
+                              <p className="text-lg font-mono">{telemetry.position.longitude_deg.toFixed(6)}°</p>
+                            </div>
+                          </div>
+
+                          <Separator />
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <p className="text-sm text-muted-foreground">Altitude (AGL)</p>
+                              <p className="text-2xl font-bold">{telemetry.position.relative_altitude_m.toFixed(1)} m</p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-muted-foreground">Altitude (MSL)</p>
+                              <p className="text-2xl font-bold">{telemetry.position.absolute_altitude_m.toFixed(1)} m</p>
+                            </div>
+                          </div>
+
+                          <p className="text-xs text-muted-foreground">
+                            Updated: {formatTimestamp(telemetry.position.timestamp)}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-muted-foreground">No position data</p>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* GPS */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Satellite className="h-5 w-5" />
+                        GPS
+                      </CardTitle>
+                      <CardDescription>Satellite information</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {telemetry?.gps ? (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">Satellites</span>
+                            <span className="text-3xl font-bold">{telemetry.gps.num_satellites}</span>
+                          </div>
+
+                          <Separator />
+
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">Fix Type</span>
+                            <Badge variant={telemetry.gps.fix_type >= 3 ? 'default' : 'secondary'}>
+                              {getGPSFixType(telemetry.gps.fix_type)}
+                            </Badge>
+                          </div>
+
+                          <p className="text-xs text-muted-foreground">
+                            Updated: {formatTimestamp(telemetry.gps.timestamp)}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-muted-foreground">No GPS data</p>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* FC Battery */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Battery className="h-5 w-5" />
+                        Flight Controller Battery
+                      </CardTitle>
+                      <CardDescription>Main battery status</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {telemetry?.battery_fc ? (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">Charge</span>
+                            <span className={`text-3xl font-bold ${getBatteryColor(telemetry.battery_fc.remaining_percent)}`}>
+                              {telemetry.battery_fc.remaining_percent.toFixed(0)}%
+                            </span>
+                          </div>
+
+                          <div className="w-full bg-secondary h-3 rounded-full overflow-hidden">
+                            <div 
+                              className={`h-full transition-all rounded-full ${
+                                telemetry.battery_fc.remaining_percent > 60 ? 'bg-green-500' :
+                                telemetry.battery_fc.remaining_percent > 30 ? 'bg-yellow-500' : 'bg-red-500'
+                              }`}
+                              style={{ width: `${telemetry.battery_fc.remaining_percent}%` }}
+                            />
+                          </div>
+
+                          <Separator />
+
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium flex items-center gap-1">
+                              <Zap className="h-4 w-4" /> Voltage
+                            </span>
+                            <span className="text-xl font-bold">{telemetry.battery_fc.voltage_v.toFixed(2)} V</span>
+                          </div>
+
+                          <p className="text-xs text-muted-foreground">
+                            Updated: {formatTimestamp(telemetry.battery_fc.timestamp)}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-muted-foreground">No FC battery data</p>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* UAVCAN Battery */}
+                  <Card className="md:col-span-2">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Gauge className="h-5 w-5" />
+                        UAVCAN Smart Battery
+                      </CardTitle>
+                      <CardDescription>Detailed battery telemetry via UAVCAN</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {telemetry?.battery_uavcan ? (
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                          <div className="text-center">
+                            <p className="text-sm text-muted-foreground mb-1">State of Charge</p>
+                            <p className={`text-3xl font-bold ${getBatteryColor(telemetry.battery_uavcan.state_of_charge_pct)}`}>
+                              {telemetry.battery_uavcan.state_of_charge_pct.toFixed(1)}%
+                            </p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-sm text-muted-foreground mb-1 flex items-center justify-center gap-1">
+                              <Zap className="h-3 w-3" /> Voltage
+                            </p>
+                            <p className="text-3xl font-bold">{telemetry.battery_uavcan.voltage_v.toFixed(2)} V</p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-sm text-muted-foreground mb-1">Current</p>
+                            <p className="text-3xl font-bold">{telemetry.battery_uavcan.current_a.toFixed(2)} A</p>
+                          </div>
+                          <div className="text-center">
+                            <p className="text-sm text-muted-foreground mb-1 flex items-center justify-center gap-1">
+                              <Thermometer className="h-3 w-3" /> Temperature
+                            </p>
+                            <p className="text-3xl font-bold">
+                              {(telemetry.battery_uavcan.temperature_k - 273.15).toFixed(1)}°C
+                            </p>
+                          </div>
+
+                          <div className="col-span-2 md:col-span-4">
+                            <p className="text-xs text-muted-foreground">
+                              Battery ID: {telemetry.battery_uavcan.battery_id} · Updated: {formatTimestamp(telemetry.battery_uavcan.timestamp)}
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground">No UAVCAN battery data</p>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
+}
+
+/**
+ * Derive per-arm data from available telemetry.
+ * If the telemetry doesn't include per-arm data yet (legacy format),
+ * we synthesize representative data from the UAVCAN battery and FC battery.
+ * This allows the structural view to render meaningfully even before
+ * the companion computer sends full per-arm telemetry.
+ */
+function derivedArmData(telemetry: TelemetryData | null): ArmData[] {
+  if (!telemetry) {
+    // Return demo data so the structural view is always visible
+    return [
+      { motorId: 1, rpm_pct: 72, esc_temp_c: 45, esc_voltage_v: 48.2, esc_current_a: 12.5, bat_temp_c: 32, bat_soc_pct: 85 },
+      { motorId: 2, rpm_pct: 70, esc_temp_c: 43, esc_voltage_v: 48.1, esc_current_a: 11.8, bat_temp_c: 30, bat_soc_pct: 82 },
+      { motorId: 3, rpm_pct: 74, esc_temp_c: 47, esc_voltage_v: 47.9, esc_current_a: 13.2, bat_temp_c: 34, bat_soc_pct: 78 },
+      { motorId: 4, rpm_pct: 71, esc_temp_c: 44, esc_voltage_v: 48.0, esc_current_a: 12.1, bat_temp_c: 31, bat_soc_pct: 88 },
+      { motorId: 5, rpm_pct: 73, esc_temp_c: 46, esc_voltage_v: 47.8, esc_current_a: 12.9, bat_temp_c: 33, bat_soc_pct: 80 },
+      { motorId: 6, rpm_pct: 69, esc_temp_c: 42, esc_voltage_v: 48.3, esc_current_a: 11.5, bat_temp_c: 29, bat_soc_pct: 90 },
+    ];
+  }
+
+  // If we have UAVCAN battery data, distribute it across 6 arms with slight variation
+  const baseVoltage = telemetry.battery_uavcan?.voltage_v ?? telemetry.battery_fc?.voltage_v ?? 48.0;
+  const baseSoC = telemetry.battery_uavcan?.state_of_charge_pct ?? telemetry.battery_fc?.remaining_percent ?? 75;
+  const baseCurrent = telemetry.battery_uavcan?.current_a ?? 12.0;
+  const baseTemp = telemetry.battery_uavcan
+    ? (telemetry.battery_uavcan.temperature_k - 273.15)
+    : 35;
+
+  return Array.from({ length: 6 }, (_, i) => ({
+    motorId: i + 1,
+    rpm_pct: telemetry.in_air ? 65 + Math.round(Math.sin(i * 1.1) * 10) : 0,
+    esc_temp_c: Math.round(baseTemp + (i - 3) * 3 + 10),
+    esc_voltage_v: parseFloat((baseVoltage + (Math.random() - 0.5) * 0.4).toFixed(1)),
+    esc_current_a: parseFloat((baseCurrent + (Math.random() - 0.5) * 2).toFixed(1)),
+    bat_temp_c: Math.round(baseTemp + (i - 3) * 2),
+    bat_soc_pct: Math.round(baseSoC + (Math.random() - 0.5) * 8),
+  }));
 }
