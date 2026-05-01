@@ -1491,3 +1491,6 @@
 - [x] Rotate structure 90° so rectangular cage is horizontal (landscape orientation)
 - [x] M1 at top-left corner arm tip of the long side
 - [x] Motor numbering increases clockwise (M1→M2→M3→M4→M5→M6)
+
+## Structural View — Cage Orientation Fix
+- [x] Change rectangular cage from horizontal to vertical (tall, narrow)

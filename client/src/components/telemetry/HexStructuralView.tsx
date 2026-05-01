@@ -128,21 +128,21 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
     return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
   };
 
-  // Battery cage dimensions (horizontal rectangle — long axis is left-right)
-  const cageW = 260;
-  const cageH = 150;
+  // Battery cage dimensions (vertical rectangle — long axis is top-bottom)
+  const cageW = 150;
+  const cageH = 260;
 
-  // Battery positions inside cage (2 rows x 3 columns)
+  // Battery positions inside cage (3 rows x 2 columns, vertical layout)
   const batteryPositions = useMemo(() => {
-    const bw = 55;
-    const bh = 50;
+    const bw = 50;
+    const bh = 55;
     const gapX = 14;
     const gapY = 14;
-    const startX = cx - (bw * 1.5 + gapX);
-    const startY = cy - (bh + gapY / 2);
+    const startX = cx - (bw + gapX / 2);
+    const startY = cy - (bh * 1.5 + gapY);
     const positions = [];
-    for (let row = 0; row < 2; row++) {
-      for (let col = 0; col < 3; col++) {
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 2; col++) {
         positions.push({
           x: startX + col * (bw + gapX),
           y: startY + row * (bh + gapY),
@@ -255,10 +255,10 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
         {/* Diagonal cross-bracing */}
         <line x1={cx - cageW / 2} y1={cy - cageH / 2} x2={cx + cageW / 2} y2={cy + cageH / 2} stroke="#374151" strokeWidth="2" opacity="0.6" />
         <line x1={cx + cageW / 2} y1={cy - cageH / 2} x2={cx - cageW / 2} y2={cy + cageH / 2} stroke="#374151" strokeWidth="2" opacity="0.6" />
-        {/* Vertical center cross-member */}
-        <line x1={cx} y1={cy - cageH / 2} x2={cx} y2={cy + cageH / 2} stroke="#374151" strokeWidth="2" opacity="0.6" />
+        {/* Horizontal center cross-member */}
+        <line x1={cx - cageW / 2} y1={cy} x2={cx + cageW / 2} y2={cy} stroke="#374151" strokeWidth="2" opacity="0.6" />
 
-        {/* ===== BATTERIES inside cage (6 units, 2 rows x 3 columns) ===== */}
+        {/* ===== BATTERIES inside cage (6 units, 3 rows x 2 columns) ===== */}
         {batteryPositions.map((bp, i) => {
           const arm = arms[i];
           const soc = arm?.bat_soc_pct ?? 0;
