@@ -1498,3 +1498,8 @@
 ## Structural View — Scale Up Everything
 - [x] Make all elements much larger: arms, motors, propellers, cage, batteries, text
 - [x] Ensure the structure fills the available viewport
+
+## Structural View — Maximize Viewport
+- [x] Condense status/demo banner to a single compact line
+- [x] Remove unnecessary padding/margins around SVG container
+- [x] Let SVG fill full available height (flex-1 layout)

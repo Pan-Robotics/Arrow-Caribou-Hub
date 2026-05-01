@@ -133,122 +133,88 @@ export default function TelemetryApp() {
   };
 
   return (
-    <div className="h-full w-full overflow-auto bg-background">
-      <div className="container py-4 space-y-4">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Flight Telemetry</h1>
-            <p className="text-sm text-muted-foreground">Caribou Hexarotor — Real-time flight data</p>
-          </div>
-          <div className="flex items-center gap-3">
-            {/* Drone Selector */}
-            {dronesLoading ? (
-              <div className="flex items-center gap-2">
-                <Loader2 className="animate-spin" size={16} />
-                <span className="text-sm text-muted-foreground">Loading drones...</span>
-              </div>
-            ) : drones && drones.length > 0 ? (
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">Drone:</span>
-                <Select value={selectedDrone || undefined} onValueChange={setSelectedDrone}>
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder="Select drone" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {drones.map((drone) => (
-                      <SelectItem key={drone.id} value={drone.droneId}>
-                        {drone.name || drone.droneId}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : (
-              <div className="text-sm text-muted-foreground">No drones registered</div>
-            )}
-
-            <ConnectionStatus
-              socketConnected={socket?.connected ?? false}
-              lastDataAt={lastDataAt}
-              staleThresholdSeconds={10}
-            />
-            {lastUpdate && (
-              <span className="text-sm text-muted-foreground">
-                {lastUpdate.toLocaleTimeString()}
-              </span>
-            )}
-          </div>
+    <div className="h-full w-full overflow-hidden bg-background flex flex-col">
+      {/* Compact header bar */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/50 shrink-0">
+        <div className="flex items-center gap-3">
+          <h1 className="text-sm font-semibold">Flight Telemetry</h1>
+          {selectedDrone && lastDataAt == null && (
+            <span className="text-xs text-muted-foreground">Demo mode — {selectedDrone}</span>
+          )}
+          {!selectedDrone && !dronesLoading && (
+            <span className="text-xs text-yellow-500">No drone selected</span>
+          )}
         </div>
+        <div className="flex items-center gap-2">
+          {dronesLoading ? (
+            <Loader2 className="animate-spin" size={14} />
+          ) : drones && drones.length > 0 ? (
+            <Select value={selectedDrone || undefined} onValueChange={setSelectedDrone}>
+              <SelectTrigger className="h-7 w-[160px] text-xs">
+                <SelectValue placeholder="Select drone" />
+              </SelectTrigger>
+              <SelectContent>
+                {drones.map((drone) => (
+                  <SelectItem key={drone.id} value={drone.droneId}>
+                    {drone.name || drone.droneId}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          <ConnectionStatus
+            socketConnected={socket?.connected ?? false}
+            lastDataAt={lastDataAt}
+            staleThresholdSeconds={10}
+          />
+        </div>
+      </div>
 
-        {!selectedDrone && !dronesLoading && (
-          <Alert>
-            <Activity className="h-4 w-4" />
-            <AlertDescription>
-              No drone selected. Please register a drone in the Drone Configuration page first.
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {selectedDrone && lastDataAt == null && (
-          <Alert>
-            <Activity className="h-4 w-4" />
-            <AlertDescription>
-              Waiting for telemetry data from drone <strong>{selectedDrone}</strong>... Showing demo layout.
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {/* Main tabbed view */}
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-3 max-w-md">
-            <TabsTrigger value="structural" className="flex items-center gap-1.5">
-              <Hexagon className="h-4 w-4" />
-              <span className="hidden sm:inline">Structure</span>
-            </TabsTrigger>
-            <TabsTrigger value="cockpit" className="flex items-center gap-1.5">
-              <Monitor className="h-4 w-4" />
-              <span className="hidden sm:inline">Cockpit</span>
-            </TabsTrigger>
-            <TabsTrigger value="data" className="flex items-center gap-1.5">
-              <Activity className="h-4 w-4" />
-              <span className="hidden sm:inline">Data</span>
-            </TabsTrigger>
-          </TabsList>
+      {/* Main content — fills remaining space */}
+      <div className="flex-1 overflow-hidden flex flex-col">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
+          <div className="px-3 pt-1 shrink-0">
+            <TabsList className="h-8 grid grid-cols-3 max-w-xs">
+              <TabsTrigger value="structural" className="text-xs h-7 flex items-center gap-1">
+                <Hexagon className="h-3.5 w-3.5" />
+                Structure
+              </TabsTrigger>
+              <TabsTrigger value="cockpit" className="text-xs h-7 flex items-center gap-1">
+                <Monitor className="h-3.5 w-3.5" />
+                Cockpit
+              </TabsTrigger>
+              <TabsTrigger value="data" className="text-xs h-7 flex items-center gap-1">
+                <Activity className="h-3.5 w-3.5" />
+                Data
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           {/* ===== STRUCTURAL VIEW TAB ===== */}
-          <TabsContent value="structural" className="mt-4">
-            <Card className="border-0 shadow-none bg-slate-950">
-              <CardContent className="p-2">
-                <div className="w-full" style={{ minHeight: '600px', height: 'calc(100vh - 280px)' }}>
-                  <HexStructuralView arms={armData} />
-                </div>
-              </CardContent>
-            </Card>
+          <TabsContent value="structural" className="flex-1 overflow-hidden m-0 p-0">
+            <div className="w-full h-full bg-[#0f1419]">
+              <HexStructuralView arms={armData} className="w-full h-full" />
+            </div>
           </TabsContent>
 
           {/* ===== COCKPIT HUD TAB ===== */}
-          <TabsContent value="cockpit" className="mt-4">
-            <Card className="border-0 shadow-none bg-slate-950">
-              <CardContent className="p-2">
-                <div className="w-full" style={{ minHeight: '500px', height: 'calc(100vh - 280px)' }}>
-                  <CockpitHUD
-                    attitude={telemetry?.attitude ?? { roll_deg: 0, pitch_deg: 0, yaw_deg: 0 }}
-                    position={telemetry?.position ?? null}
-                    gps={telemetry?.gps ?? null}
-                    battery_fc={telemetry?.battery_fc ?? null}
-                    in_air={telemetry?.in_air ?? false}
-                    airspeed_ms={telemetry?.airspeed_ms ?? 0}
-                    vertical_speed_ms={telemetry?.vertical_speed_ms ?? 0}
-                    flight_mode={telemetry?.flight_mode ?? 'STABILIZE'}
-                  />
-                </div>
-              </CardContent>
-            </Card>
+          <TabsContent value="cockpit" className="flex-1 overflow-hidden m-0 p-0">
+            <div className="w-full h-full bg-[#0f1419]">
+              <CockpitHUD
+                attitude={telemetry?.attitude ?? { roll_deg: 0, pitch_deg: 0, yaw_deg: 0 }}
+                position={telemetry?.position ?? null}
+                gps={telemetry?.gps ?? null}
+                battery_fc={telemetry?.battery_fc ?? null}
+                in_air={telemetry?.in_air ?? false}
+                airspeed_ms={telemetry?.airspeed_ms ?? 0}
+                vertical_speed_ms={telemetry?.vertical_speed_ms ?? 0}
+                flight_mode={telemetry?.flight_mode ?? 'STABILIZE'}
+              />
+            </div>
           </TabsContent>
 
           {/* ===== DATA CARDS TAB ===== */}
-          <TabsContent value="data" className="mt-4">
+          <TabsContent value="data" className="flex-1 overflow-auto m-0 p-3">
             {selectedDrone && (
               <div className="space-y-6">
                 {/* Flight Status */}
