@@ -22,48 +22,43 @@ interface HexStructuralViewProps {
 /**
  * Caribou hexarotor top-down structural view.
  * 
- * Actual Caribou geometry (after 90° CW rotation from the top-down photo):
- * - Rectangular battery cage oriented vertically (tall, narrow)
- * - Motor 1: straight up (north) from center hub
- * - Motor 4: straight down (south) from center hub
- * - Motors 2,3: upper-right and lower-right (splayed ~55° from vertical)
- * - Motors 5,6: lower-left and upper-left (splayed ~55° from vertical)
- * - Orange tubular arms, black motor hubs with tri-blade propellers
- * - 6 batteries arranged 3x2 inside the cage
- * - Green FC module in center
+ * Actual Caribou geometry (photo rotated 90° CW → landscape orientation):
+ * - Rectangular battery cage is HORIZONTAL (wide, short) — the long axis is left-right
+ * - The original photo has the long axis vertical with 1 arm straight up and 1 straight down
+ * - After 90° CW rotation: those straight arms become LEFT and RIGHT
+ * - The 4 corner arms (which were diagonal in the photo) become the top-left, top-right,
+ *   bottom-right, and bottom-left corners
+ * 
+ * Motor numbering (clockwise from top-left corner of the long side):
+ *   M1 = top-left corner (upper-left diagonal arm)
+ *   M2 = top-right corner (upper-right diagonal arm)
+ *   M3 = right (straight arm pointing right)
+ *   M4 = bottom-right corner (lower-right diagonal arm)
+ *   M5 = bottom-left corner (lower-left diagonal arm)
+ *   M6 = left (straight arm pointing left)
  */
 export function HexStructuralView({ arms, className = '' }: HexStructuralViewProps) {
   const cx = 500;
   const cy = 500;
-  const armLength = 260;
+  const armLength = 250;
 
-  // Actual Caribou arm angles (rotated 90° CW from the photo):
-  // Photo shows: top arm straight up, bottom straight down, 4 diagonal arms at ~55° from vertical
-  // After 90° CW rotation:
-  // M1 = 0° (right/east - was top in photo)
-  // M2 = 55° (lower-right)
-  // M3 = 125° (lower-left)
-  // M4 = 180° (left/west - was bottom in photo)
-  // M5 = 235° (upper-left)
-  // M6 = 305° (upper-right)
-  // 
-  // Actually looking at the photo more carefully:
-  // The image shows the craft with one arm straight up and one straight down (vertical axis)
-  // The 4 other arms splay out at roughly 50-55° from those vertical arms
-  // After 90° CW rotation, the straight arms become horizontal (left/right)
-  // and the diagonal arms rotate accordingly.
+  // Motor angles in SVG coordinate system (0° = right, clockwise positive)
+  // Clockwise from top-left:
+  // M1: top-left corner → about -125° (upper-left)
+  // M2: top-right corner → about -55° (upper-right)
+  // M3: right → 0° (straight right)
+  // M4: bottom-right corner → about 55° (lower-right)
+  // M5: bottom-left corner → about 125° (lower-left)
+  // M6: left → 180° (straight left)
   //
-  // Let me use the actual angles from the photo:
-  // Photo (before rotation): top=90°(up), upper-left≈145°, lower-left≈215°, bottom=270°, lower-right≈325°, upper-right≈35°
-  // In SVG coords (0°=right, clockwise): top=-90°, etc.
-  // After 90° CW rotation of the craft, subtract 90° from each arm's physical angle:
+  // The diagonal arms splay at roughly 55° from the horizontal axis
   const armAngles = useMemo(() => [
-    -90,    // M1: top (was left in original photo) — straight up
-    -35,    // M2: upper-right diagonal
-    35,     // M3: lower-right diagonal  
-    90,     // M4: bottom (was right in original photo) — straight down
-    145,    // M5: lower-left diagonal
-    215,    // M6: upper-left diagonal
+    -125,   // M1: top-left corner
+    -55,    // M2: top-right corner
+    0,      // M3: right (straight)
+    55,     // M4: bottom-right corner
+    125,    // M5: bottom-left corner
+    180,    // M6: left (straight)
   ], []);
 
   // Motor positions at end of each arm
@@ -83,10 +78,9 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
     const rad = (bladeAngle * Math.PI) / 180;
     const tipX = mx + bladeLen * Math.cos(rad);
     const tipY = my + bladeLen * Math.sin(rad);
-    // Blade is tapered: wide at root, narrow at tip
     const perpRad = rad + Math.PI / 2;
-    const rootWidth = 12;
-    const tipWidth = 4;
+    const rootWidth = 11;
+    const tipWidth = 3;
     const rx1 = mx + rootWidth * Math.cos(perpRad);
     const ry1 = my + rootWidth * Math.sin(perpRad);
     const rx2 = mx - rootWidth * Math.cos(perpRad);
@@ -134,23 +128,24 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
     return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
   };
 
-  // Battery cage dimensions (rectangular, oriented vertically to match rotated photo)
-  const cageW = 180;
-  const cageH = 260;
+  // Battery cage dimensions (horizontal rectangle — long axis is left-right)
+  const cageW = 260;
+  const cageH = 150;
 
-  // Battery positions inside cage (3 rows x 2 columns)
+  // Battery positions inside cage (2 rows x 3 columns)
   const batteryPositions = useMemo(() => {
-    const bw = 60;
-    const bh = 55;
-    const gap = 12;
-    const startX = cx - (bw + gap / 2);
-    const startY = cy - (bh * 1.5 + gap);
+    const bw = 55;
+    const bh = 50;
+    const gapX = 14;
+    const gapY = 14;
+    const startX = cx - (bw * 1.5 + gapX);
+    const startY = cy - (bh + gapY / 2);
     const positions = [];
-    for (let row = 0; row < 3; row++) {
-      for (let col = 0; col < 2; col++) {
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 3; col++) {
         positions.push({
-          x: startX + col * (bw + gap),
-          y: startY + row * (bh + gap),
+          x: startX + col * (bw + gapX),
+          y: startY + row * (bh + gapY),
           w: bw,
           h: bh
         });
@@ -167,27 +162,18 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
         style={{ filter: 'drop-shadow(0 0 20px rgba(59, 130, 246, 0.1))' }}
       >
         <defs>
-          {/* Subtle grid pattern */}
           <pattern id="hex-grid" width="50" height="50" patternUnits="userSpaceOnUse">
             <path d="M 50 0 L 0 0 0 50" fill="none" stroke="rgba(100,116,139,0.06)" strokeWidth="0.5" />
           </pattern>
-          {/* Arm gradient (orange tubular look) */}
           <linearGradient id="armGrad" x1="0%" y1="0%" x2="0%" y2="100%">
             <stop offset="0%" stopColor="#f97316" />
             <stop offset="50%" stopColor="#fb923c" />
             <stop offset="100%" stopColor="#ea580c" />
           </linearGradient>
-          {/* Motor hub gradient */}
           <radialGradient id="motorHub" cx="50%" cy="40%" r="50%">
             <stop offset="0%" stopColor="#374151" />
             <stop offset="100%" stopColor="#111827" />
           </radialGradient>
-          {/* Cage frame gradient */}
-          <linearGradient id="cageGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#4b5563" />
-            <stop offset="100%" stopColor="#1f2937" />
-          </linearGradient>
-          {/* Glow filter for active elements */}
           <filter id="motorGlow" x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur stdDeviation="4" result="blur" />
             <feMerge>
@@ -216,7 +202,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           />
         ))}
 
-        {/* Arm edge highlights (thin dark lines to give tubular depth) */}
+        {/* Arm edge highlights (tubular depth) */}
         {motorPositions.map((pos, i) => {
           const rad = (armAngles[i] * Math.PI) / 180;
           const perpRad = rad + Math.PI / 2;
@@ -245,8 +231,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           );
         })}
 
-        {/* ===== CENTRAL BATTERY CAGE (rectangular frame) ===== */}
-        {/* Outer cage frame */}
+        {/* ===== CENTRAL BATTERY CAGE (horizontal rectangular frame) ===== */}
         <rect
           x={cx - cageW / 2}
           y={cy - cageH / 2}
@@ -257,7 +242,6 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           stroke="#4b5563"
           strokeWidth="4"
         />
-        {/* Inner cage frame (structural cross-members) */}
         <rect
           x={cx - cageW / 2 + 8}
           y={cy - cageH / 2 + 8}
@@ -271,17 +255,16 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
         {/* Diagonal cross-bracing */}
         <line x1={cx - cageW / 2} y1={cy - cageH / 2} x2={cx + cageW / 2} y2={cy + cageH / 2} stroke="#374151" strokeWidth="2" opacity="0.6" />
         <line x1={cx + cageW / 2} y1={cy - cageH / 2} x2={cx - cageW / 2} y2={cy + cageH / 2} stroke="#374151" strokeWidth="2" opacity="0.6" />
-        {/* Horizontal cross-member */}
-        <line x1={cx - cageW / 2} y1={cy} x2={cx + cageW / 2} y2={cy} stroke="#374151" strokeWidth="2" opacity="0.6" />
+        {/* Vertical center cross-member */}
+        <line x1={cx} y1={cy - cageH / 2} x2={cx} y2={cy + cageH / 2} stroke="#374151" strokeWidth="2" opacity="0.6" />
 
-        {/* ===== BATTERIES inside cage (6 units, 3x2 grid) ===== */}
+        {/* ===== BATTERIES inside cage (6 units, 2 rows x 3 columns) ===== */}
         {batteryPositions.map((bp, i) => {
           const arm = arms[i];
           const soc = arm?.bat_soc_pct ?? 0;
           const socColor = getSoCColor(soc);
           return (
             <g key={`bat-${i}`}>
-              {/* Battery body */}
               <rect
                 x={bp.x}
                 y={bp.y}
@@ -303,7 +286,6 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
                 fill={socColor}
                 opacity="0.3"
               />
-              {/* Battery label */}
               <text
                 x={bp.x + bp.w / 2}
                 y={bp.y + 12}
@@ -314,7 +296,6 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
               >
                 BAT {i + 1}
               </text>
-              {/* SoC percentage */}
               <text
                 x={bp.x + bp.w / 2}
                 y={bp.y + bp.h / 2 + 4}
@@ -326,7 +307,6 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
               >
                 {soc}%
               </text>
-              {/* Temp */}
               <text
                 x={bp.x + bp.w / 2}
                 y={bp.y + bp.h - 6}
@@ -343,10 +323,10 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
 
         {/* ===== FLIGHT CONTROLLER (green square in center) ===== */}
         <rect
-          x={cx - 22}
-          y={cy - 22}
-          width="44"
-          height="44"
+          x={cx - 20}
+          y={cy - 20}
+          width="40"
+          height="40"
           rx="4"
           fill="#166534"
           stroke="#22c55e"
@@ -373,34 +353,33 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           const escTempColor = getTempColor(arm.esc_temp_c);
           const rpmColor = getRpmColor(arm.rpm_pct);
           const power = (arm.esc_voltage_v * arm.esc_current_a).toFixed(0);
-          const motorR = 28;
+          const motorR = 26;
 
-          // SoC arc (battery ring around motor)
+          // SoC arc
           const socAngle = (arm.bat_soc_pct / 100) * 360;
-          const socArcPath = socAngle > 0 ? describeArc(pos.x, pos.y, motorR + 38, -90, -90 + Math.min(socAngle, 359.9)) : '';
+          const socArcPath = socAngle > 0 ? describeArc(pos.x, pos.y, motorR + 36, -90, -90 + Math.min(socAngle, 359.9)) : '';
 
-          // Tri-blade propeller (3 blades at 120° intervals)
-          const bladeLen = 62;
-          const bladeBaseAngle = (i * 30) % 360; // Offset each motor's prop orientation slightly
+          // Tri-blade propeller
+          const bladeLen = 58;
+          const bladeBaseAngle = (i * 25) % 360;
 
-          // Data label positioning — place outside the propeller disc
-          const labelAngle = armAngles[i];
-          const labelRad = (labelAngle * Math.PI) / 180;
-          const labelDist = motorR + 95;
+          // Data label positioning — radially outward from center
+          const labelRad = (armAngles[i] * Math.PI) / 180;
+          const labelDist = motorR + 90;
           const labelX = pos.x + labelDist * Math.cos(labelRad);
           const labelY = pos.y + labelDist * Math.sin(labelRad);
-          // Determine text anchor based on position
+          // Text anchor based on which side of center
           const textAnchor = pos.x > cx + 50 ? 'start' : pos.x < cx - 50 ? 'end' : 'middle';
 
           return (
             <g key={`motor-${i}`}>
-              {/* Propeller disc (faint circle showing sweep area) */}
+              {/* Propeller disc outline */}
               <circle
                 cx={pos.x}
                 cy={pos.y}
-                r={motorR + 32}
+                r={motorR + 30}
                 fill="none"
-                stroke="rgba(100,116,139,0.15)"
+                stroke="rgba(100,116,139,0.12)"
                 strokeWidth="1"
                 strokeDasharray="4 4"
               />
@@ -417,15 +396,16 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
                 />
               ))}
 
-              {/* SoC ring (battery level) */}
+              {/* SoC ring track */}
               <circle
                 cx={pos.x}
                 cy={pos.y}
-                r={motorR + 38}
+                r={motorR + 36}
                 fill="none"
                 stroke="rgba(100,116,139,0.15)"
                 strokeWidth="4"
               />
+              {/* SoC ring fill */}
               {socArcPath && (
                 <path
                   d={socArcPath}
@@ -437,7 +417,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
                 />
               )}
 
-              {/* Motor hub (black circle) */}
+              {/* Motor hub */}
               <circle
                 cx={pos.x}
                 cy={pos.y}
@@ -447,7 +427,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
                 strokeWidth="2"
               />
 
-              {/* RPM indicator ring inside motor hub */}
+              {/* RPM indicator ring */}
               <circle
                 cx={pos.x}
                 cy={pos.y}
@@ -463,12 +443,12 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
               />
 
               {/* Motor center dot */}
-              <circle cx={pos.x} cy={pos.y} r="5" fill="#1f2937" stroke="#6b7280" strokeWidth="1" />
+              <circle cx={pos.x} cy={pos.y} r="4" fill="#1f2937" stroke="#6b7280" strokeWidth="1" />
 
-              {/* Motor number label */}
+              {/* Motor number label (above motor) */}
               <text
                 x={pos.x}
-                y={pos.y - motorR - 42}
+                y={pos.y - motorR - 40}
                 textAnchor="middle"
                 fill="#e2e8f0"
                 fontSize="12"
@@ -478,7 +458,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
                 M{arm.motorId}
               </text>
 
-              {/* Data labels positioned outside propeller disc */}
+              {/* Data labels */}
               <g>
                 <text x={labelX} y={labelY - 18} textAnchor={textAnchor} fill={rpmColor} fontSize="11" fontFamily="monospace" fontWeight="bold">
                   {arm.rpm_pct}% RPM
@@ -497,12 +477,12 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           );
         })}
 
-        {/* ===== HEADER LABEL ===== */}
+        {/* ===== HEADER ===== */}
         <text x="20" y="30" fill="#e2e8f0" fontSize="14" fontFamily="monospace" fontWeight="bold">
           CARIBOU HEX-6 — STRUCTURAL VIEW
         </text>
         <text x="20" y="48" fill="#64748b" fontSize="11" fontFamily="monospace">
-          6× Independent Motor / ESC / Battery
+          6× Independent Motor / ESC / Battery — CW numbering from top-left
         </text>
 
         {/* ===== LEGEND ===== */}
