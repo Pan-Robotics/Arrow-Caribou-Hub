@@ -6,7 +6,7 @@ import { useMemo } from 'react';
  */
 export interface ArmData {
   motorId: number;
-  rpm_pct: number;        // 0–140 range, warning at 120+
+  rpm: number;            // Raw RPM value from ESC
   esc_temp_c: number;     // ESC temperature in Celsius
   esc_voltage_v: number;  // ESC bus voltage
   esc_current_a: number;  // ESC current draw
@@ -89,8 +89,8 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
   };
 
   const getRpmColor = (rpm: number) => {
-    if (rpm < 80) return '#22c55e';
-    if (rpm < 120) return '#eab308';
+    if (rpm < 6000) return '#22c55e';
+    if (rpm < 7200) return '#eab308';
     return '#ef4444';
   };
 
@@ -322,7 +322,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
         {motorPositions.map((pos, i) => {
           const arm = arms[i] || {
             motorId: i + 1,
-            rpm_pct: 0,
+            rpm: 0,
             esc_temp_c: 0,
             esc_voltage_v: 0,
             esc_current_a: 0,
@@ -332,7 +332,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
 
           const socColor = getSoCColor(arm.bat_soc_pct);
           const escTempColor = getTempColor(arm.esc_temp_c);
-          const rpmColor = getRpmColor(arm.rpm_pct);
+          const rpmColor = getRpmColor(arm.rpm);
           const power = (arm.esc_voltage_v * arm.esc_current_a).toFixed(0);
           const motorR = 32;
 
@@ -416,7 +416,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
                 fill="none"
                 stroke={rpmColor}
                 strokeWidth="5"
-                strokeDasharray={`${(arm.rpm_pct / 140) * (2 * Math.PI * motorR * 0.7)} ${2 * Math.PI * motorR * 0.7}`}
+                strokeDasharray={`${Math.min(arm.rpm / 8000, 1) * (2 * Math.PI * motorR * 0.7)} ${2 * Math.PI * motorR * 0.7}`}
                 strokeLinecap="round"
                 transform={`rotate(-90 ${pos.x} ${pos.y})`}
                 opacity="0.9"
@@ -442,7 +442,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
               {/* Data labels */}
               <g>
                 <text x={labelX} y={labelY - 22} textAnchor={textAnchor} fill={rpmColor} fontSize="14" fontFamily="monospace" fontWeight="bold">
-                  {arm.rpm_pct}% RPM
+                  {arm.rpm} RPM
                 </text>
                 <text x={labelX} y={labelY - 4} textAnchor={textAnchor} fill={escTempColor} fontSize="13" fontFamily="monospace">
                   ESC {arm.esc_temp_c}°C

@@ -1511,3 +1511,9 @@
 - [x] Move RINGS info to top-right corner below legend
 - [x] Reduce structure size by 15% (arm length, motor hubs, propellers)
 - [x] Reduce CockpitHUD artificial horizon by 20%
+
+## RPM: Change from percentage to raw value
+- [x] Forwarder: send raw RPM instead of rpm_pct
+- [x] ArmData interface: change rpm_pct to rpm (raw number)
+- [x] HexStructuralView: display raw RPM value instead of percentage
+- [x] TelemetryApp derivedArmData: generate raw RPM values in demo data

@@ -30,7 +30,7 @@ function getRpmColor(rpm: number) {
 // Replicate the arm data derivation from TelemetryApp
 interface ArmData {
   motorId: number;
-  rpm_pct: number;
+  rpm: number;
   esc_temp_c: number;
   esc_voltage_v: number;
   esc_current_a: number;
@@ -45,12 +45,12 @@ function derivedArmData(telemetry: {
 } | null): ArmData[] {
   if (!telemetry) {
     return [
-      { motorId: 1, rpm_pct: 72, esc_temp_c: 45, esc_voltage_v: 48.2, esc_current_a: 12.5, bat_temp_c: 32, bat_soc_pct: 85 },
-      { motorId: 2, rpm_pct: 70, esc_temp_c: 43, esc_voltage_v: 48.1, esc_current_a: 11.8, bat_temp_c: 30, bat_soc_pct: 82 },
-      { motorId: 3, rpm_pct: 74, esc_temp_c: 47, esc_voltage_v: 47.9, esc_current_a: 13.2, bat_temp_c: 34, bat_soc_pct: 78 },
-      { motorId: 4, rpm_pct: 71, esc_temp_c: 44, esc_voltage_v: 48.0, esc_current_a: 12.1, bat_temp_c: 31, bat_soc_pct: 88 },
-      { motorId: 5, rpm_pct: 73, esc_temp_c: 46, esc_voltage_v: 47.8, esc_current_a: 12.9, bat_temp_c: 33, bat_soc_pct: 80 },
-      { motorId: 6, rpm_pct: 69, esc_temp_c: 42, esc_voltage_v: 48.3, esc_current_a: 11.5, bat_temp_c: 29, bat_soc_pct: 90 },
+      { motorId: 1, rpm: 5760, esc_temp_c: 45, esc_voltage_v: 48.2, esc_current_a: 12.5, bat_temp_c: 32, bat_soc_pct: 85 },
+      { motorId: 2, rpm: 5600, esc_temp_c: 43, esc_voltage_v: 48.1, esc_current_a: 11.8, bat_temp_c: 30, bat_soc_pct: 82 },
+      { motorId: 3, rpm: 5920, esc_temp_c: 47, esc_voltage_v: 47.9, esc_current_a: 13.2, bat_temp_c: 34, bat_soc_pct: 78 },
+      { motorId: 4, rpm: 5680, esc_temp_c: 44, esc_voltage_v: 48.0, esc_current_a: 12.1, bat_temp_c: 31, bat_soc_pct: 88 },
+      { motorId: 5, rpm: 5840, esc_temp_c: 46, esc_voltage_v: 47.8, esc_current_a: 12.9, bat_temp_c: 33, bat_soc_pct: 80 },
+      { motorId: 6, rpm: 5520, esc_temp_c: 42, esc_voltage_v: 48.3, esc_current_a: 11.5, bat_temp_c: 29, bat_soc_pct: 90 },
     ];
   }
 
@@ -63,7 +63,7 @@ function derivedArmData(telemetry: {
 
   return Array.from({ length: 6 }, (_, i) => ({
     motorId: i + 1,
-    rpm_pct: telemetry.in_air ? 65 + Math.round(Math.sin(i * 1.1) * 10) : 0,
+    rpm: telemetry.in_air ? 5200 + Math.round(Math.sin(i * 1.1) * 800) : 0,
     esc_temp_c: Math.round(baseTemp + (i - 3) * 3 + 10),
     esc_voltage_v: parseFloat((baseVoltage + (Math.random() - 0.5) * 0.4).toFixed(1)),
     esc_current_a: parseFloat((baseCurrent + (Math.random() - 0.5) * 2).toFixed(1)),
@@ -114,7 +114,7 @@ describe("derivedArmData", () => {
     expect(arms).toHaveLength(6);
     arms.forEach((arm, i) => {
       expect(arm.motorId).toBe(i + 1);
-      expect(arm.rpm_pct).toBeGreaterThan(0);
+      expect(arm.rpm).toBeGreaterThan(0);
       expect(arm.bat_soc_pct).toBeGreaterThan(0);
     });
   });
@@ -134,7 +134,7 @@ describe("derivedArmData", () => {
     arms.forEach((arm, i) => {
       expect(arm.motorId).toBe(i + 1);
       // When in_air, RPM should be non-zero
-      expect(arm.rpm_pct).toBeGreaterThan(0);
+      expect(arm.rpm).toBeGreaterThan(0);
       // Voltage should be near 50V
       expect(arm.esc_voltage_v).toBeGreaterThan(49);
       expect(arm.esc_voltage_v).toBeLessThan(51);
@@ -149,7 +149,7 @@ describe("derivedArmData", () => {
     });
     expect(arms).toHaveLength(6);
     arms.forEach(arm => {
-      expect(arm.rpm_pct).toBe(0);
+      expect(arm.rpm).toBe(0);
     });
   });
 
