@@ -1494,3 +1494,7 @@
 
 ## Structural View — Cage Orientation Fix
 - [x] Change rectangular cage from horizontal to vertical (tall, narrow)
+
+## Structural View — Scale Up Everything
+- [x] Make all elements much larger: arms, motors, propellers, cage, batteries, text
+- [x] Ensure the structure fills the available viewport
