@@ -459,18 +459,19 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
         })}
 
         {/* ===== LEGEND (top-right corner) ===== */}
-        <g transform="translate(980, 20)">
-          <text fill="#94a3b8" fontSize="11" fontFamily="monospace" y="0" fontWeight="bold" textAnchor="end">LEGEND</text>
-          <circle cx="195" cy="18" r="5" fill="#22c55e" />
-          <text x="188" y="22" fill="#94a3b8" fontSize="10" fontFamily="monospace" textAnchor="end">Good (&gt;60% / &lt;50°C)</text>
-          <circle cx="195" cy="36" r="5" fill="#eab308" />
-          <text x="188" y="40" fill="#94a3b8" fontSize="10" fontFamily="monospace" textAnchor="end">Warning (30-60% / 50-70°C)</text>
-          <circle cx="195" cy="54" r="5" fill="#ef4444" />
-          <text x="188" y="58" fill="#94a3b8" fontSize="10" fontFamily="monospace" textAnchor="end">Critical (&lt;15% / &gt;85°C)</text>
-          <text fill="#94a3b8" fontSize="11" fontFamily="monospace" y="80" fontWeight="bold" textAnchor="end">RINGS</text>
-          <text fill="#64748b" fontSize="10" fontFamily="monospace" y="96" textAnchor="end">Outer = Battery SoC</text>
-          <text fill="#64748b" fontSize="10" fontFamily="monospace" y="112" textAnchor="end">Inner = Motor RPM %</text>
-          <text fill="#64748b" fontSize="10" fontFamily="monospace" y="128" textAnchor="end">Cage = Per-cell SoC bars</text>
+        <g transform="translate(1000, 20)">
+          <text x="0" fill="#94a3b8" fontSize="11" fontFamily="monospace" y="0" fontWeight="bold">LEGEND</text>
+          <circle cx="6" cy="18" r="5" fill="#22c55e" />
+          <text x="16" y="22" fill="#94a3b8" fontSize="10" fontFamily="monospace">Good (&gt;60% / &lt;50°C)</text>
+          <circle cx="6" cy="36" r="5" fill="#eab308" />
+          <text x="16" y="40" fill="#94a3b8" fontSize="10" fontFamily="monospace">Warning (30-60% / 50-70°C)</text>
+          <circle cx="6" cy="54" r="5" fill="#ef4444" />
+          <text x="16" y="58" fill="#94a3b8" fontSize="10" fontFamily="monospace">Critical (&lt;15% / &gt;85°C)</text>
+          {/* RINGS - directly below legend, same alignment */}
+          <text x="0" fill="#94a3b8" fontSize="11" fontFamily="monospace" y="82" fontWeight="bold">RINGS</text>
+          <text x="0" fill="#64748b" fontSize="10" fontFamily="monospace" y="98">Outer = Battery SoC</text>
+          <text x="0" fill="#64748b" fontSize="10" fontFamily="monospace" y="112">Inner = Motor RPM %</text>
+          <text x="0" fill="#64748b" fontSize="10" fontFamily="monospace" y="126">Cage = Per-cell SoC bars</text>
         </g>
       </svg>
     </div>
