@@ -1503,3 +1503,11 @@
 - [x] Condense status/demo banner to a single compact line
 - [x] Remove unnecessary padding/margins around SVG container
 - [x] Let SVG fill full available height (flex-1 layout)
+
+## Structural View — Text/Layout Fixes
+- [x] Remove "CARIBOU HEX-6 — STRUCTURAL VIEW" header text from SVG
+- [x] Remove "6× Independent Motor / ESC / Battery — CW numbering from top-left" subheader
+- [x] Move LEGEND to top-right corner (currently bottom-left, getting occluded)
+- [x] Move RINGS info to top-right corner below legend
+- [x] Reduce structure size by 15% (arm length, motor hubs, propellers)
+- [x] Reduce CockpitHUD artificial horizon by 20%

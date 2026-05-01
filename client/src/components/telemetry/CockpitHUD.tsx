@@ -95,7 +95,7 @@ export function CockpitHUD({
       <svg viewBox="0 0 800 600" className="w-full h-full" preserveAspectRatio="xMidYMid meet">
         <defs>
           <clipPath id="horizon-clip">
-            <circle cx="400" cy="300" r="200" />
+            <circle cx="400" cy="300" r="160" />
           </clipPath>
           <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#1e3a5f" />
@@ -168,15 +168,15 @@ export function CockpitHUD({
         </g>
 
         {/* Horizon circle border */}
-        <circle cx="400" cy="300" r="200" fill="none" stroke="#475569" strokeWidth="2" />
+        <circle cx="400" cy="300" r="160" fill="none" stroke="#475569" strokeWidth="2" />
 
         {/* Roll indicator arc (top of horizon) */}
         <g>
           {/* Roll scale ticks */}
           {[-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60].map(deg => {
             const rad = ((deg - 90) * Math.PI) / 180;
-            const r1 = 195;
-            const r2 = deg % 30 === 0 ? 185 : 190;
+            const r1 = 156;
+            const r2 = deg % 30 === 0 ? 148 : 152;
             return (
               <line
                 key={`roll-tick-${deg}`}
@@ -192,24 +192,24 @@ export function CockpitHUD({
           {/* Roll pointer (triangle) */}
           <g transform={`rotate(${roll} 400 300)`}>
             <polygon
-              points="400,102 395,112 405,112"
+              points="400,142 395,152 405,152"
               fill="#f97316"
             />
           </g>
           {/* Fixed top reference triangle */}
           <polygon
-            points="400,98 396,90 404,90"
+              points="400,138 396,130 404,130"
             fill="white"
           />
         </g>
 
         {/* Aircraft reference symbol (fixed center) */}
         <g>
-          <line x1="350" y1="300" x2="385" y2="300" stroke="#f97316" strokeWidth="3" />
-          <line x1="415" y1="300" x2="450" y2="300" stroke="#f97316" strokeWidth="3" />
+          <line x1="360" y1="300" x2="388" y2="300" stroke="#f97316" strokeWidth="3" />
+          <line x1="412" y1="300" x2="440" y2="300" stroke="#f97316" strokeWidth="3" />
           <circle cx="400" cy="300" r="4" fill="none" stroke="#f97316" strokeWidth="2" />
-          <line x1="385" y1="300" x2="385" y2="308" stroke="#f97316" strokeWidth="3" />
-          <line x1="415" y1="300" x2="415" y2="308" stroke="#f97316" strokeWidth="3" />
+          <line x1="388" y1="300" x2="388" y2="307" stroke="#f97316" strokeWidth="3" />
+          <line x1="412" y1="300" x2="412" y2="307" stroke="#f97316" strokeWidth="3" />
         </g>
 
         {/* ===== SPEED TAPE (left side) ===== */}

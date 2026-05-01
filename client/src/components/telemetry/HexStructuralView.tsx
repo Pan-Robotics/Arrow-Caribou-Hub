@@ -29,7 +29,7 @@ interface HexStructuralViewProps {
 export function HexStructuralView({ arms, className = '' }: HexStructuralViewProps) {
   const cx = 600;
   const cy = 500;
-  const armLength = 360;
+  const armLength = 306;  // 360 * 0.85 = 306 (15% smaller)
 
   // Motor angles — clockwise from top-left
   const armAngles = useMemo(() => [
@@ -53,14 +53,14 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
     });
   }, [armAngles]);
 
-  // Propeller blade path (tri-blade) — LARGER
+  // Propeller blade path (tri-blade)
   const propBlade = (mx: number, my: number, bladeAngle: number, bladeLen: number) => {
     const rad = (bladeAngle * Math.PI) / 180;
     const tipX = mx + bladeLen * Math.cos(rad);
     const tipY = my + bladeLen * Math.sin(rad);
     const perpRad = rad + Math.PI / 2;
-    const rootWidth = 16;
-    const tipWidth = 5;
+    const rootWidth = 14;
+    const tipWidth = 4;
     const rx1 = mx + rootWidth * Math.cos(perpRad);
     const ry1 = my + rootWidth * Math.sin(perpRad);
     const rx2 = mx - rootWidth * Math.cos(perpRad);
@@ -108,16 +108,16 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
     return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 1 ${end.x} ${end.y}`;
   };
 
-  // Battery cage dimensions (vertical rectangle — tall, narrow)
-  const cageW = 200;
-  const cageH = 340;
+  // Battery cage dimensions (vertical rectangle — tall, narrow) — 15% smaller
+  const cageW = 170;
+  const cageH = 289;
 
   // Battery positions inside cage (3 rows x 2 columns)
   const batteryPositions = useMemo(() => {
-    const bw = 70;
-    const bh = 80;
-    const gapX = 16;
-    const gapY = 16;
+    const bw = 60;
+    const bh = 68;
+    const gapX = 14;
+    const gapY = 14;
     const startX = cx - (bw + gapX / 2);
     const startY = cy - (bh * 1.5 + gapY);
     const positions = [];
@@ -177,7 +177,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
             x2={pos.x}
             y2={pos.y}
             stroke="url(#armGrad)"
-            strokeWidth="22"
+            strokeWidth="19"
             strokeLinecap="round"
             opacity="0.92"
           />
@@ -187,7 +187,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
         {motorPositions.map((pos, i) => {
           const rad = (armAngles[i] * Math.PI) / 180;
           const perpRad = rad + Math.PI / 2;
-          const offset = 10;
+          const offset = 8;
           return (
             <g key={`arm-edge-${i}`}>
               <line
@@ -334,19 +334,19 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           const escTempColor = getTempColor(arm.esc_temp_c);
           const rpmColor = getRpmColor(arm.rpm_pct);
           const power = (arm.esc_voltage_v * arm.esc_current_a).toFixed(0);
-          const motorR = 38;
+          const motorR = 32;
 
           // SoC arc
           const socAngle = (arm.bat_soc_pct / 100) * 360;
-          const socArcPath = socAngle > 0 ? describeArc(pos.x, pos.y, motorR + 48, -90, -90 + Math.min(socAngle, 359.9)) : '';
+          const socArcPath = socAngle > 0 ? describeArc(pos.x, pos.y, motorR + 40, -90, -90 + Math.min(socAngle, 359.9)) : '';
 
           // Tri-blade propeller
-          const bladeLen = 80;
+          const bladeLen = 68;
           const bladeBaseAngle = (i * 25) % 360;
 
           // Data label positioning — radially outward from center
           const labelRad = (armAngles[i] * Math.PI) / 180;
-          const labelDist = motorR + 110;
+          const labelDist = motorR + 90;
           const labelX = pos.x + labelDist * Math.cos(labelRad);
           const labelY = pos.y + labelDist * Math.sin(labelRad);
           // Text anchor based on which side of center
@@ -358,10 +358,10 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
               <circle
                 cx={pos.x}
                 cy={pos.y}
-                r={motorR + 42}
-                fill="none"
-                stroke="rgba(100,116,139,0.15)"
-                strokeWidth="1.5"
+              r={motorR + 36}
+              fill="none"
+              stroke="rgba(100,116,139,0.15)"
+              strokeWidth="1.5"
                 strokeDasharray="6 4"
               />
 
@@ -381,10 +381,10 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
               <circle
                 cx={pos.x}
                 cy={pos.y}
-                r={motorR + 48}
-                fill="none"
-                stroke="rgba(100,116,139,0.15)"
-                strokeWidth="6"
+              r={motorR + 40}
+              fill="none"
+              stroke="rgba(100,116,139,0.15)"
+              strokeWidth="5"
               />
               {/* SoC ring fill */}
               {socArcPath && (
@@ -392,7 +392,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
                   d={socArcPath}
                   fill="none"
                   stroke={socColor}
-                  strokeWidth="6"
+                  strokeWidth="5"
                   strokeLinecap="round"
                   opacity="0.85"
                 />
@@ -429,7 +429,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
               {/* Motor number label */}
               <text
                 x={pos.x}
-                y={pos.y - motorR - 54}
+                y={pos.y - motorR - 44}
                 textAnchor="middle"
                 fill="#e2e8f0"
                 fontSize="16"
@@ -458,30 +458,19 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           );
         })}
 
-        {/* ===== HEADER ===== */}
-        <text x="30" y="40" fill="#e2e8f0" fontSize="20" fontFamily="monospace" fontWeight="bold">
-          CARIBOU HEX-6 — STRUCTURAL VIEW
-        </text>
-        <text x="30" y="65" fill="#64748b" fontSize="14" fontFamily="monospace">
-          6× Independent Motor / ESC / Battery — CW numbering from top-left
-        </text>
-
-        {/* ===== LEGEND ===== */}
-        <g transform="translate(30, 900)">
-          <text fill="#94a3b8" fontSize="13" fontFamily="monospace" y="0" fontWeight="bold">LEGEND</text>
-          <circle cx="8" cy="22" r="6" fill="#22c55e" />
-          <text x="20" y="27" fill="#94a3b8" fontSize="12" fontFamily="monospace">Good (&gt;60% SoC / &lt;50°C)</text>
-          <circle cx="8" cy="44" r="6" fill="#eab308" />
-          <text x="20" y="49" fill="#94a3b8" fontSize="12" fontFamily="monospace">Warning (30-60% / 50-70°C)</text>
-          <circle cx="8" cy="66" r="6" fill="#ef4444" />
-          <text x="20" y="71" fill="#94a3b8" fontSize="12" fontFamily="monospace">Critical (&lt;15% / &gt;85°C)</text>
-        </g>
-
-        <g transform="translate(850, 900)">
-          <text fill="#94a3b8" fontSize="13" fontFamily="monospace" y="0" fontWeight="bold">RINGS</text>
-          <text fill="#64748b" fontSize="12" fontFamily="monospace" y="22">Outer = Battery SoC</text>
-          <text fill="#64748b" fontSize="12" fontFamily="monospace" y="44">Inner = Motor RPM %</text>
-          <text fill="#64748b" fontSize="12" fontFamily="monospace" y="66">Cage = Per-cell SoC bars</text>
+        {/* ===== LEGEND (top-right corner) ===== */}
+        <g transform="translate(980, 20)">
+          <text fill="#94a3b8" fontSize="11" fontFamily="monospace" y="0" fontWeight="bold" textAnchor="end">LEGEND</text>
+          <circle cx="195" cy="18" r="5" fill="#22c55e" />
+          <text x="188" y="22" fill="#94a3b8" fontSize="10" fontFamily="monospace" textAnchor="end">Good (&gt;60% / &lt;50°C)</text>
+          <circle cx="195" cy="36" r="5" fill="#eab308" />
+          <text x="188" y="40" fill="#94a3b8" fontSize="10" fontFamily="monospace" textAnchor="end">Warning (30-60% / 50-70°C)</text>
+          <circle cx="195" cy="54" r="5" fill="#ef4444" />
+          <text x="188" y="58" fill="#94a3b8" fontSize="10" fontFamily="monospace" textAnchor="end">Critical (&lt;15% / &gt;85°C)</text>
+          <text fill="#94a3b8" fontSize="11" fontFamily="monospace" y="80" fontWeight="bold" textAnchor="end">RINGS</text>
+          <text fill="#64748b" fontSize="10" fontFamily="monospace" y="96" textAnchor="end">Outer = Battery SoC</text>
+          <text fill="#64748b" fontSize="10" fontFamily="monospace" y="112" textAnchor="end">Inner = Motor RPM %</text>
+          <text fill="#64748b" fontSize="10" fontFamily="monospace" y="128" textAnchor="end">Cage = Per-cell SoC bars</text>
         </g>
       </svg>
     </div>
