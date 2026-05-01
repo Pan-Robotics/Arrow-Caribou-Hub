@@ -156,7 +156,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="h-screen bg-background overflow-hidden">
       {/* Sidebar */}
       <AppSidebar
         apps={apps}
@@ -171,7 +171,7 @@ export default function Home() {
       />
 
       {/* Main Content Area (with left margin for sidebar) */}
-      <div className="ml-16 min-h-screen flex flex-col">
+      <div className="ml-16 h-screen flex flex-col overflow-hidden">
         {/* Global Header */}
         <header className="border-b border-border bg-card">
           <div className="px-6 py-4">
@@ -186,7 +186,7 @@ export default function Home() {
         </header>
 
         {/* App Content */}
-        <main className="flex-1">
+        <main className="flex-1 min-h-0 overflow-hidden">
           {renderApp()}
         </main>
       </div>

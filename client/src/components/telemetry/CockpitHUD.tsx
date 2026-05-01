@@ -91,8 +91,8 @@ export function CockpitHUD({
   };
 
   return (
-    <div className={`relative w-full h-full bg-slate-950 overflow-hidden ${className}`}>
-      <svg viewBox="0 0 800 600" className="w-full h-full" preserveAspectRatio="xMidYMid meet">
+    <div className={`relative w-full h-full bg-slate-950 overflow-hidden flex items-center justify-center ${className}`}>
+      <svg viewBox="0 0 800 600" className="max-w-[800px] max-h-[600px] w-full h-auto" preserveAspectRatio="xMidYMid meet">
         <defs>
           <clipPath id="horizon-clip">
             <circle cx="400" cy="300" r="160" />

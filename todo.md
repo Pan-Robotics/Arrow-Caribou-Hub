@@ -1517,3 +1517,7 @@
 - [x] ArmData interface: change rpm_pct to rpm (raw number)
 - [x] HexStructuralView: display raw RPM value instead of percentage
 - [x] TelemetryApp derivedArmData: generate raw RPM values in demo data
+
+## CockpitHUD — Fixed Size Layout
+- [x] Artificial horizon must have a fixed pixel size (never expand to fill viewport)
+- [x] All elements must fit within viewport without scrolling at any window size
