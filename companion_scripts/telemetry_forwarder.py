@@ -363,11 +363,17 @@ class TelemetryForwarder:
 
                 rpm_raw = getattr(msg, 'rpm', 0)
 
+                # ESC temperature is the ESC board temp; motor_temperature is winding temp
+                # Some ESCs report motor temp via a separate thermistor channel
+                esc_temp_k = getattr(msg, 'temperature', 273.15)
+                motor_temp_k = getattr(msg, 'motor_temperature', 273.15)
+
                 esc_data = {
                     'rpm': rpm_raw,
                     'voltage_v': getattr(msg, 'voltage', 0),
                     'current_a': getattr(msg, 'current', 0),
-                    'temperature_c': getattr(msg, 'temperature', 273.15) - 273.15,
+                    'temperature_c': esc_temp_k - 273.15,
+                    'motor_temperature_c': motor_temp_k - 273.15,
                     'power_rating_pct': getattr(msg, 'power_rating_pct', 0),
                     'error_count': getattr(msg, 'error_count', 0),
                     'timestamp': datetime.now().isoformat()
@@ -402,7 +408,7 @@ class TelemetryForwarder:
         """
         Assemble per-arm data array from collected BMS and ESC data.
         Returns list of 6 arm objects matching the Caribou Hub ArmData interface:
-            { motorId, rpm_pct, esc_temp_c, esc_voltage_v, esc_current_a, bat_temp_c, bat_soc_pct }
+            { motorId, rpm, motor_temp_c, esc_temp_c, esc_voltage_v, esc_current_a, bat_temp_c, bat_soc_pct }
         """
         arms = []
         for arm_id in range(1, 7):
@@ -412,6 +418,7 @@ class TelemetryForwarder:
             arm_data = {
                 'motorId': arm_id,
                 'rpm': esc.get('rpm', 0),
+                'motor_temp_c': round(esc.get('motor_temperature_c', 0), 1),
                 'esc_temp_c': round(esc.get('temperature_c', 0), 1),
                 'esc_voltage_v': round(esc.get('voltage_v', 0), 1),
                 'esc_current_a': round(esc.get('current_a', 0), 1),

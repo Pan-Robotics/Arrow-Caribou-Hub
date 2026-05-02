@@ -1,0 +1,51 @@
+[Unit]
+Description=Caribou Hub – Telemetry Forwarder (MAVLink + 6×BMS + 6×ESC → Hub)
+Documentation=https://github.com/Pan-Robotics/Arrow-Caribou-Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=caribou
+Group=caribou
+WorkingDirectory=/home/caribou/caribou-hub
+
+# Load environment variables (WEB_SERVER_URL, API_KEY, DRONE_ID, etc.)
+EnvironmentFile=/home/caribou/caribou-hub/forwarder.env
+
+# Service-specific environment
+Environment=PYTHONUNBUFFERED=1
+Environment=MAVLINK_URL=udpin://0.0.0.0:14540
+Environment=UPDATE_RATE_HZ=10
+Environment=CAN_INTERFACE=can0
+
+# Execute the Caribou telemetry forwarder
+# Collects: attitude, position, GPS, velocity, heading, flight mode (MAVLink)
+#           6× BMS voltage/current/temp/SoC/SoH (UAVCAN)
+#           6× ESC RPM/temp/voltage/current (UAVCAN)
+#           6× Motor temperature (UAVCAN)
+ExecStart=/usr/bin/python3 /home/caribou/caribou-hub/telemetry_forwarder.py
+
+# Restart policy
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Resource limits
+LimitNOFILE=65536
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=caribou-telemetry-forwarder
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/caribou/caribou-hub
+
+[Install]
+WantedBy=multi-user.target

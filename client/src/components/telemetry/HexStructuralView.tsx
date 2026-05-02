@@ -7,6 +7,7 @@ import { useMemo } from 'react';
 export interface ArmData {
   motorId: number;
   rpm: number;            // Raw RPM value from ESC
+  motor_temp_c: number;   // Motor winding temperature in Celsius
   esc_temp_c: number;     // ESC temperature in Celsius
   esc_voltage_v: number;  // ESC bus voltage
   esc_current_a: number;  // ESC current draw
@@ -308,6 +309,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           const arm = arms[i] || {
             motorId: i + 1,
             rpm: 0,
+            motor_temp_c: 0,
             esc_temp_c: 0,
             esc_voltage_v: 0,
             esc_current_a: 0,
@@ -316,6 +318,7 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
           };
 
           const socColor = getSoCColor(arm.bat_soc_pct);
+          const motorTempColor = getTempColor(arm.motor_temp_c, 120);
           const escTempColor = getTempColor(arm.esc_temp_c);
           const rpmColor = getRpmColor(arm.rpm);
           const power = (arm.esc_voltage_v * arm.esc_current_a).toFixed(0);
@@ -426,16 +429,19 @@ export function HexStructuralView({ arms, className = '' }: HexStructuralViewPro
 
               {/* Data labels */}
               <g>
-                <text x={labelX} y={labelY - 22} textAnchor={textAnchor} fill={rpmColor} fontSize="14" fontFamily="monospace" fontWeight="bold">
+                <text x={labelX} y={labelY - 32} textAnchor={textAnchor} fill={rpmColor} fontSize="14" fontFamily="monospace" fontWeight="bold">
                   {arm.rpm} RPM
                 </text>
-                <text x={labelX} y={labelY - 4} textAnchor={textAnchor} fill={escTempColor} fontSize="13" fontFamily="monospace">
+                <text x={labelX} y={labelY - 14} textAnchor={textAnchor} fill={motorTempColor} fontSize="13" fontFamily="monospace">
+                  MOT {arm.motor_temp_c}°C
+                </text>
+                <text x={labelX} y={labelY + 4} textAnchor={textAnchor} fill={escTempColor} fontSize="13" fontFamily="monospace">
                   ESC {arm.esc_temp_c}°C
                 </text>
-                <text x={labelX} y={labelY + 14} textAnchor={textAnchor} fill="#94a3b8" fontSize="13" fontFamily="monospace">
+                <text x={labelX} y={labelY + 22} textAnchor={textAnchor} fill="#94a3b8" fontSize="13" fontFamily="monospace">
                   {arm.esc_voltage_v.toFixed(1)}V / {arm.esc_current_a.toFixed(1)}A
                 </text>
-                <text x={labelX} y={labelY + 32} textAnchor={textAnchor} fill="#64748b" fontSize="13" fontFamily="monospace">
+                <text x={labelX} y={labelY + 40} textAnchor={textAnchor} fill="#64748b" fontSize="13" fontFamily="monospace">
                   {power}W
                 </text>
               </g>

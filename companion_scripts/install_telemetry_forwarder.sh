@@ -5,8 +5,12 @@
 # Installs the Caribou Hub Telemetry Forwarder on a Raspberry Pi.
 #
 # This service provides:
-#   - MAVLink telemetry collection via MAVSDK (attitude, position, GPS, battery)
-#   - UAVCAN battery data collection via DroneCAN (voltage, current, SoC, SoH)
+#   - MAVLink telemetry collection via MAVSDK (attitude, position, GPS, battery,
+#     velocity, heading, flight mode)
+#   - UAVCAN per-arm data collection via DroneCAN:
+#       • 6× BMS (voltage, current, temperature, SoC, SoH)
+#       • 6× ESC (RPM, temperature, voltage, current)
+#       • 6× Motor temperature
 #   - HTTP POST forwarding to Caribou Hub REST endpoint
 #   - Multi-threaded architecture (MAVLink, UAVCAN, HTTP workers)
 #
@@ -14,7 +18,7 @@
 #   - Raspberry Pi 4 or 5 with Raspberry Pi OS (64-bit)
 #   - Python 3.9+
 #   - Flight controller connected via UDP (MAVLink)
-#   - CAN interface configured for UAVCAN (optional)
+#   - CAN interface configured for UAVCAN (required for per-arm data)
 #   - Internet connectivity to Caribou Hub
 #   - forwarder.env file with WEB_SERVER_URL and API_KEY
 #
@@ -33,8 +37,8 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Telemetry Forwarder Installer${NC}"
-echo -e "${GREEN}  MAVLink + UAVCAN → Caribou Hub${NC}"
+echo -e "${GREEN}Caribou Telemetry Forwarder Installer${NC}"
+echo -e "${GREEN}  MAVLink + 6×BMS + 6×ESC → Caribou Hub${NC}"
 echo -e "${GREEN}========================================${NC}"
 
 # Check if running as root
@@ -44,8 +48,8 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Configuration defaults
-INSTALL_DIR="/home/alexd/caribou"
-SERVICE_USER="alexd"
+INSTALL_DIR="/home/caribou/caribou-hub"
+SERVICE_USER="caribou"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Prompt for configuration
@@ -69,8 +73,8 @@ else
     read -p "Create forwarder.env now? [Y/n]: " CREATE_ENV
     CREATE_ENV=${CREATE_ENV:-Y}
     if [[ "$CREATE_ENV" =~ ^[Yy] ]]; then
-        read -p "Caribou Hub URL [https://rplidar-viz-cjlhozxe.manus.space]: " HUB_URL
-        HUB_URL=${HUB_URL:-"https://rplidar-viz-cjlhozxe.manus.space"}
+        read -p "Caribou Hub URL [https://arrowhub-5j6w8bkt.manus.space]: " HUB_URL
+        HUB_URL=${HUB_URL:-"https://arrowhub-5j6w8bkt.manus.space"}
 
         read -p "Drone ID [caribou_001]: " DRONE_ID
         DRONE_ID=${DRONE_ID:-"caribou_001"}
@@ -103,16 +107,23 @@ MAVLINK_URL=${MAVLINK_URL:-"udpin://0.0.0.0:14540"}
 
 # UAVCAN configuration
 echo ""
-echo -e "${YELLOW}UAVCAN Battery Monitoring:${NC}"
-echo "  The forwarder can also collect battery data via UAVCAN/DroneCAN."
+echo -e "${YELLOW}UAVCAN Per-Arm Monitoring (6×BMS + 6×ESC + 6×Motor Temp):${NC}"
+echo "  Caribou has 6 independent motor/ESC/battery arms."
+echo "  UAVCAN collects per-arm BMS, ESC, and motor temperature data via CAN bus."
 echo "  This requires a CAN interface (e.g., can0) configured on the Pi."
-read -p "Enable UAVCAN battery monitoring? [Y/n]: " ENABLE_UAVCAN
+read -p "Enable UAVCAN per-arm monitoring? [Y/n]: " ENABLE_UAVCAN
 ENABLE_UAVCAN=${ENABLE_UAVCAN:-Y}
 
 CAN_INTERFACE="can0"
 if [[ "$ENABLE_UAVCAN" =~ ^[Yy] ]]; then
     read -p "CAN interface [can0]: " CAN_INPUT
     CAN_INTERFACE=${CAN_INPUT:-"can0"}
+
+    echo ""
+    echo -e "${CYAN}  UAVCAN Node ID Mapping (default for Caribou):${NC}"
+    echo "    BMS nodes:  10=Arm1, 11=Arm2, 12=Arm3, 13=Arm4, 14=Arm5, 15=Arm6"
+    echo "    ESC nodes:  20=Arm1, 21=Arm2, 22=Arm3, 23=Arm4, 24=Arm5, 25=Arm6"
+    echo "  Edit telemetry_forwarder.py ARM_BMS_NODE_IDS / ARM_ESC_NODE_IDS to change."
 fi
 
 # Telemetry rate
@@ -125,7 +136,7 @@ echo -e "${CYAN}Summary:${NC}"
 echo "  Install dir:    $INSTALL_DIR"
 echo "  Service user:   $SERVICE_USER"
 echo "  MAVLink URL:    $MAVLINK_URL"
-echo "  UAVCAN:         $(if [[ "$ENABLE_UAVCAN" =~ ^[Yy] ]]; then echo "Enabled ($CAN_INTERFACE)"; else echo "Disabled"; fi)"
+echo "  UAVCAN:         $(if [[ "$ENABLE_UAVCAN" =~ ^[Yy] ]]; then echo "Enabled ($CAN_INTERFACE) — 6×BMS + 6×ESC + 6×Motor Temp"; else echo "Disabled"; fi)"
 echo "  Update rate:    ${UPDATE_RATE} Hz"
 echo "  Env file:       $ENV_FILE"
 echo ""
@@ -171,10 +182,10 @@ if [[ "$ENABLE_UAVCAN" =~ ^[Yy] ]]; then
     ENV_OVERRIDES+="\nEnvironment=CAN_INTERFACE=${CAN_INTERFACE}"
 fi
 
-cat > /etc/systemd/system/telemetry-forwarder.service << EOF
+cat > /etc/systemd/system/caribou-telemetry-forwarder.service << EOF
 [Unit]
-Description=Caribou Hub – Telemetry Forwarder (MAVLink + UAVCAN → Hub)
-Documentation=https://github.com/Pan-Robotics/Feather-Companion-Computer
+Description=Caribou Hub – Telemetry Forwarder (MAVLink + 6×BMS + 6×ESC → Hub)
+Documentation=https://github.com/Pan-Robotics/Arrow-Caribou-Hub
 After=network-online.target
 Wants=network-online.target
 
@@ -190,7 +201,7 @@ EnvironmentFile=${ENV_FILE}
 # Service-specific environment
 $(echo -e "$ENV_OVERRIDES")
 
-# Execute the telemetry forwarder
+# Execute the Caribou telemetry forwarder
 ExecStart=/usr/bin/python3 ${INSTALL_DIR}/telemetry_forwarder.py
 
 # Restart policy
@@ -205,7 +216,7 @@ LimitNOFILE=65536
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=telemetry-forwarder
+SyslogIdentifier=caribou-telemetry-forwarder
 
 # Security hardening
 NoNewPrivileges=true
@@ -218,15 +229,15 @@ ReadWritePaths=${INSTALL_DIR}
 WantedBy=multi-user.target
 EOF
 
-echo -e "${GREEN}  ✓ Service file created at /etc/systemd/system/telemetry-forwarder.service${NC}"
+echo -e "${GREEN}  ✓ Service file created at /etc/systemd/system/caribou-telemetry-forwarder.service${NC}"
 
 # ── Step 4: Enable and start service ─────────────────────────────────────
 echo ""
 echo -e "${GREEN}[4/4] Enabling and starting service...${NC}"
 
 systemctl daemon-reload
-systemctl enable telemetry-forwarder.service
-systemctl start telemetry-forwarder.service
+systemctl enable caribou-telemetry-forwarder.service
+systemctl start caribou-telemetry-forwarder.service
 
 echo -e "${GREEN}  ✓ Service enabled and started${NC}"
 
@@ -237,21 +248,25 @@ echo -e "${GREEN}Installation complete!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 echo -e "${CYAN}Useful commands:${NC}"
-echo "  sudo systemctl status telemetry-forwarder      # Check service status"
-echo "  sudo journalctl -u telemetry-forwarder -f      # View live logs"
-echo "  sudo systemctl restart telemetry-forwarder     # Restart service"
-echo "  sudo systemctl stop telemetry-forwarder        # Stop service"
+echo "  sudo systemctl status caribou-telemetry-forwarder      # Check service status"
+echo "  sudo journalctl -u caribou-telemetry-forwarder -f      # View live logs"
+echo "  sudo systemctl restart caribou-telemetry-forwarder     # Restart service"
+echo "  sudo systemctl stop caribou-telemetry-forwarder        # Stop service"
 echo ""
 echo -e "${CYAN}The service will:${NC}"
 echo "  • Collect MAVLink telemetry at ${UPDATE_RATE} Hz from ${MAVLINK_URL}"
+echo "    (attitude, position, GPS, velocity, heading, flight mode)"
 if [[ "$ENABLE_UAVCAN" =~ ^[Yy] ]]; then
-    echo "  • Collect UAVCAN battery data from ${CAN_INTERFACE}"
+    echo "  • Collect UAVCAN per-arm data from ${CAN_INTERFACE}:"
+    echo "      6× BMS: voltage, current, temperature, SoC, SoH"
+    echo "      6× ESC: RPM, temperature, voltage, current"
+    echo "      6× Motor temperature"
 fi
 echo "  • Forward telemetry to Caribou Hub via HTTP POST"
 echo "  • Use credentials from ${ENV_FILE}"
 echo ""
 echo -e "${CYAN}Debug mode:${NC}"
 echo "  To run with verbose logging, stop the service and run manually:"
-echo "    sudo systemctl stop telemetry-forwarder"
+echo "    sudo systemctl stop caribou-telemetry-forwarder"
 echo "    cd ${INSTALL_DIR} && python3 telemetry_forwarder.py --debug"
 echo ""

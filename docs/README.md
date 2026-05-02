@@ -22,6 +22,7 @@ This directory contains all architecture documents, pipeline references, and spe
 
 | Document | Description |
 |---|---|
+| [CARIBOU_TELEMETRY_PIPELINE.md](CARIBOU_TELEMETRY_PIPELINE.md) | Complete telemetry pipeline — hardware sensors (MAVLink + 6×BMS + 6×ESC via UAVCAN), companion computer relay, Hub REST/WebSocket ingestion, and frontend display (structural view, cockpit HUD, data cards) |
 | [LOGS_OTA_PIPELINE.md](LOGS_OTA_PIPELINE.md) | Logs & OTA Updates pipeline — FC log scan/download via HTTP (`net_webserver.lua`) with MAVFTP fallback, multipart upload, download-to-PC proxy, OTA firmware flash, system diagnostics, remote log streaming, and "Send to Flight Analytics" integration |
 
 ## Specifications

@@ -1521,3 +1521,12 @@
 ## CockpitHUD — Fixed Size Layout
 - [x] Artificial horizon must have a fixed pixel size (never expand to fill viewport)
 - [x] All elements must fit within viewport without scrolling at any window size
+
+## Motor Temperature Field + Telemetry Pipeline Docs
+- [x] Create comprehensive telemetry pipeline documentation (CARIBOU_TELEMETRY_PIPELINE.md)
+- [x] Add pipeline diagram (Mermaid → PNG)
+- [x] Update docs/README.md index with new pipeline doc
+- [x] Add motor_temp_c field to telemetry forwarder
+- [x] Add motor_temp_c field to ArmData interface
+- [x] Display motor temperature in HexStructuralView
+- [x] Remove FC block from center of structural view

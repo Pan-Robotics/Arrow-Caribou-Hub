@@ -1,0 +1,43 @@
+graph LR
+    subgraph Hardware["Caribou Hexarotor"]
+        FC[Flight Controller<br>ArduPilot]
+        BMS1[BMS 1-6<br>UAVCAN Node 10-15]
+        ESC1[ESC 1-6<br>UAVCAN Node 20-25]
+        MOT[Motors 1-6]
+    end
+
+    subgraph Companion["Raspberry Pi Companion"]
+        FWD[telemetry_forwarder.py]
+        MAV[MAVSDK<br>MAVLink UDP]
+        CAN[DroneCAN<br>can0]
+    end
+
+    subgraph Hub["Caribou Hub Server"]
+        REST[POST /api/rest/telemetry/ingest]
+        DB[(MySQL<br>telemetry table)]
+        WS[Socket.IO<br>broadcastTelemetry]
+    end
+
+    subgraph Frontend["Browser UI"]
+        TA[TelemetryApp]
+        SV[HexStructuralView<br>Top-down SVG]
+        CH[CockpitHUD<br>Artificial Horizon]
+        DC[Data Cards]
+    end
+
+    FC -->|MAVLink UDP:14540| MAV
+    BMS1 -->|CAN bus| CAN
+    ESC1 -->|CAN bus| CAN
+    MOT -.->|drives| ESC1
+
+    MAV -->|attitude, position<br>GPS, battery, velocity<br>heading, flight mode| FWD
+    CAN -->|per-arm BMS data<br>per-arm ESC data| FWD
+
+    FWD -->|HTTP POST<br>10 Hz| REST
+    REST -->|store| DB
+    REST -->|broadcast| WS
+
+    WS -->|telemetry event| TA
+    TA --> SV
+    TA --> CH
+    TA --> DC
