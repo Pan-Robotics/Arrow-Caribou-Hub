@@ -1,389 +1,368 @@
 #!/bin/bash
-# =============================================================================
-# SIYI Camera Services Installation Script
-# =============================================================================
-# This script installs the SIYI A8 mini camera controller, go2rtc WebRTC
-# streaming, and Tailscale funnel services on a Raspberry Pi companion computer.
+# ═══════════════════════════════════════════════════════════════════════════════
+# Caribou Camera Stream Services — Installer
+# ═══════════════════════════════════════════════════════════════════════════════
 #
-# Architecture:
-#   RTSP Camera → go2rtc (RTSP→WebRTC) → Tailscale Funnel (public HTTPS)
-#   Browser ←→ go2rtc (WebRTC peer-to-peer, signaling via Tailscale funnel)
+# Installs and configures:
+#   1. go2rtc binary (RTSP → WebRTC transcoding)
+#   2. Tailscale (public HTTPS tunnel for signaling)
+#   3. camera_stream_service.py (health monitor + Hub registration)
+#   4. Systemd services for all three components
 #
-# go2rtc handles RTSP ingest and WebRTC signaling/media.
-# Tailscale funnel exposes go2rtc's API to the internet for signaling.
-# WebRTC media flows peer-to-peer via UDP (STUN hole-punch).
-# camera_stream_service.py manages go2rtc, auto-detects the Tailscale
-# funnel URL, and registers it with the Caribou Hub.
+# Works with ANY RTSP camera source — no camera-specific code.
 #
-# Prerequisites:
-# - Raspberry Pi 4 or 5 with Raspberry Pi OS (64-bit)
-# - Python 3.9+
-# - Network connectivity to SIYI camera (192.168.144.25)
-# - Internet connectivity (for Tailscale funnel + Hub registration)
-#
-# Usage:
-#   chmod +x install_camera_services.sh
+# Run as root:
 #   sudo ./install_camera_services.sh
-# =============================================================================
+#
+# ═══════════════════════════════════════════════════════════════════════════════
 
 set -e
 
-# Colors for output
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}SIYI Camera Services Installer${NC}"
-echo -e "${GREEN}  WebRTC + Tailscale Funnel Edition${NC}"
-echo -e "${GREEN}========================================${NC}"
+echo -e "${CYAN}"
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║       Caribou Camera Stream Services — Installer            ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
 
-# Check if running as root
+# ─── Check root ────────────────────────────────────────────────────────────────
 if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}Please run as root (sudo)${NC}"
+    echo -e "${RED}ERROR: This script must be run as root (sudo).${NC}"
     exit 1
 fi
 
-# Detect architecture
+# ─── Detect architecture ──────────────────────────────────────────────────────
 ARCH=$(uname -m)
 case "$ARCH" in
-    aarch64) GO2RTC_ARCH="arm64" ;;
-    armv7l)  GO2RTC_ARCH="arm" ;;
-    x86_64)  GO2RTC_ARCH="amd64" ;;
+    aarch64)
+        GO2RTC_ARCH="arm64"
+        echo -e "${GREEN}Architecture: ARM64 (aarch64) — recommended${NC}"
+        ;;
+    armv7l)
+        GO2RTC_ARCH="arm"
+        echo -e "${YELLOW}Architecture: ARMv7 (32-bit)${NC}"
+        ;;
+    x86_64)
+        GO2RTC_ARCH="amd64"
+        echo -e "${GREEN}Architecture: x86_64 (amd64)${NC}"
+        ;;
     *)
-        echo -e "${RED}Unsupported architecture: $ARCH${NC}"
+        echo -e "${RED}ERROR: Unsupported architecture: $ARCH${NC}"
+        echo "Supported: aarch64 (arm64), armv7l (arm), x86_64 (amd64)"
         exit 1
         ;;
 esac
 
-# Configuration defaults
-INSTALL_DIR="/home/pi/caribou"
-SERVICE_USER="pi"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GO2RTC_BIN="/usr/local/bin/go2rtc"
-GO2RTC_API_PORT=1984
-GO2RTC_WEBRTC_PORT=8555
-TAILSCALE_FUNNEL_PORT=443
-
-# Prompt for configuration
+# ─── Interactive prompts ───────────────────────────────────────────────────────
 echo ""
-echo -e "${YELLOW}Configuration:${NC}"
-read -p "Install directory [$INSTALL_DIR]: " INPUT_DIR
-INSTALL_DIR=${INPUT_DIR:-$INSTALL_DIR}
+echo -e "${CYAN}─── Configuration ───${NC}"
+echo ""
 
-read -p "Service user [$SERVICE_USER]: " INPUT_USER
-SERVICE_USER=${INPUT_USER:-$SERVICE_USER}
+# RTSP URL (required)
+read -p "RTSP URL (e.g. rtsp://192.168.1.100:8554/stream): " RTSP_URL
+if [ -z "$RTSP_URL" ]; then
+    echo -e "${RED}ERROR: RTSP URL is required.${NC}"
+    exit 1
+fi
 
-read -p "Caribou Hub URL [https://rplidar-viz-cjlhozxe.manus.space]: " HUB_URL
-HUB_URL=${HUB_URL:-"https://rplidar-viz-cjlhozxe.manus.space"}
+# Hub URL
+read -p "Caribou Hub URL [https://arrowhub-5j6w8bkt.manus.space]: " HUB_URL
+HUB_URL=${HUB_URL:-"https://arrowhub-5j6w8bkt.manus.space"}
 
+# Drone ID
 read -p "Drone ID [caribou_001]: " DRONE_ID
 DRONE_ID=${DRONE_ID:-"caribou_001"}
 
-read -p "API Key: " API_KEY
+# API Key
+read -p "API Key for Hub authentication: " API_KEY
 if [ -z "$API_KEY" ]; then
-    echo -e "${RED}API Key is required${NC}"
+    echo -e "${YELLOW}WARNING: No API key provided. Hub registration will be disabled.${NC}"
+fi
+
+# Install directory
+DEFAULT_INSTALL_DIR="/home/caribou/caribou-hub"
+read -p "Install directory [$DEFAULT_INSTALL_DIR]: " INSTALL_DIR
+INSTALL_DIR=${INSTALL_DIR:-"$DEFAULT_INSTALL_DIR"}
+
+# Determine the user who will run the services
+INSTALL_USER=$(stat -c '%U' "$(dirname "$INSTALL_DIR")" 2>/dev/null || echo "root")
+if [ "$INSTALL_USER" = "root" ]; then
+    INSTALL_USER=$(logname 2>/dev/null || echo "pi")
+fi
+read -p "Service user [$INSTALL_USER]: " SERVICE_USER
+SERVICE_USER=${SERVICE_USER:-"$INSTALL_USER"}
+
+echo ""
+echo -e "${CYAN}─── Configuration Summary ───${NC}"
+echo "  RTSP URL:      $RTSP_URL"
+echo "  Hub URL:       $HUB_URL"
+echo "  Drone ID:      $DRONE_ID"
+echo "  API Key:       ${API_KEY:+***set***}${API_KEY:-<not set>}"
+echo "  Install dir:   $INSTALL_DIR"
+echo "  Service user:  $SERVICE_USER"
+echo "  go2rtc arch:   $GO2RTC_ARCH"
+echo ""
+read -p "Proceed with installation? [Y/n]: " CONFIRM
+CONFIRM=${CONFIRM:-Y}
+if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+    echo "Installation cancelled."
+    exit 0
+fi
+
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 1: Install system dependencies
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[1/11] Installing system dependencies...${NC}"
+apt-get update -qq
+apt-get install -y -qq python3 python3-pip curl jq > /dev/null 2>&1
+echo "  ✓ python3, python3-pip, curl, jq installed"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 2: Install Python dependencies
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[2/11] Installing Python dependencies...${NC}"
+pip3 install --break-system-packages requests > /dev/null 2>&1
+echo "  ✓ requests installed"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 3: Download go2rtc binary
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[3/11] Downloading go2rtc binary (${GO2RTC_ARCH})...${NC}"
+
+# Get latest release URL from GitHub
+GO2RTC_RELEASE_URL=$(curl -s https://api.github.com/repos/AlexxIT/go2rtc/releases/latest \
+    | jq -r ".assets[] | select(.name == \"go2rtc_linux_${GO2RTC_ARCH}\") | .browser_download_url")
+
+if [ -z "$GO2RTC_RELEASE_URL" ] || [ "$GO2RTC_RELEASE_URL" = "null" ]; then
+    echo -e "${RED}ERROR: Could not find go2rtc release for architecture: ${GO2RTC_ARCH}${NC}"
     exit 1
 fi
 
-read -p "RTSP stream type (main=4K, sub=720p) [sub]: " STREAM_TYPE
-STREAM_TYPE=${STREAM_TYPE:-"sub"}
+curl -sL "$GO2RTC_RELEASE_URL" -o /usr/local/bin/go2rtc
+chmod +x /usr/local/bin/go2rtc
+echo "  ✓ go2rtc installed at /usr/local/bin/go2rtc"
+echo "    Version: $(/usr/local/bin/go2rtc --version 2>/dev/null || echo 'unknown')"
 
-read -p "go2rtc API port [$GO2RTC_API_PORT]: " INPUT_API_PORT
-GO2RTC_API_PORT=${INPUT_API_PORT:-$GO2RTC_API_PORT}
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 4: Install Tailscale
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[4/11] Installing Tailscale...${NC}"
 
-read -p "go2rtc WebRTC UDP port [$GO2RTC_WEBRTC_PORT]: " INPUT_WEBRTC_PORT
-GO2RTC_WEBRTC_PORT=${INPUT_WEBRTC_PORT:-$GO2RTC_WEBRTC_PORT}
-
-# Build RTSP URL based on stream type
-if [ "$STREAM_TYPE" = "main" ]; then
-    RTSP_URL="rtsp://192.168.144.25:8554/main.264"
-else
-    RTSP_URL="rtsp://192.168.144.25:8554/sub.264"
-fi
-
-echo ""
-echo -e "${GREEN}Step 1: Installing system dependencies...${NC}"
-apt-get update
-apt-get install -y python3 python3-pip curl jq
-
-echo ""
-echo -e "${GREEN}Step 2: Installing Python dependencies...${NC}"
-pip3 install --break-system-packages requests 'python-socketio[asyncio_client]' aiohttp
-
-echo ""
-echo -e "${GREEN}Step 3: Installing go2rtc...${NC}"
-if [ -f "$GO2RTC_BIN" ]; then
-    echo -e "${YELLOW}go2rtc already installed, updating...${NC}"
-fi
-# Get latest release URL
-GO2RTC_URL=$(curl -s https://api.github.com/repos/AlexxIT/go2rtc/releases/latest \
-    | jq -r ".assets[] | select(.name | test(\"go2rtc_linux_${GO2RTC_ARCH}\")) | .browser_download_url" \
-    | head -1)
-if [ -z "$GO2RTC_URL" ]; then
-    echo -e "${RED}Failed to find go2rtc release for ${GO2RTC_ARCH}${NC}"
-    exit 1
-fi
-echo -e "Downloading: $GO2RTC_URL"
-curl -L "$GO2RTC_URL" -o "$GO2RTC_BIN"
-chmod +x "$GO2RTC_BIN"
-echo -e "Installed: $($GO2RTC_BIN --version 2>&1 || echo 'go2rtc installed')"
-
-echo ""
-echo -e "${GREEN}Step 4: Installing Tailscale...${NC}"
 if command -v tailscale &> /dev/null; then
-    echo -e "${YELLOW}Tailscale already installed${NC}"
-    tailscale version
+    echo "  ✓ Tailscale already installed"
 else
-    curl -fsSL https://tailscale.com/install.sh | sh
-    echo -e "${CYAN}Tailscale installed. You need to authenticate:${NC}"
-    echo -e "${CYAN}  sudo tailscale up${NC}"
-    echo -e "${CYAN}Follow the URL to authenticate this device.${NC}"
-    echo ""
-    read -p "Press Enter after authenticating Tailscale (or Ctrl+C to abort)..."
+    curl -fsSL https://tailscale.com/install.sh | sh > /dev/null 2>&1
+    echo "  ✓ Tailscale installed"
 fi
 
-# Check Tailscale status
-if ! tailscale status &> /dev/null; then
-    echo -e "${YELLOW}Tailscale is not connected. Running 'tailscale up'...${NC}"
+# Check if Tailscale is connected
+TS_STATUS=$(tailscale status --json 2>/dev/null | jq -r '.BackendState' 2>/dev/null || echo "unknown")
+if [ "$TS_STATUS" != "Running" ]; then
+    echo -e "${YELLOW}  Tailscale is not connected. Running 'tailscale up'...${NC}"
+    echo -e "${YELLOW}  Please authenticate in your browser when prompted.${NC}"
     tailscale up
-    echo -e "${CYAN}Follow the URL above to authenticate.${NC}"
-    read -p "Press Enter after authenticating..."
 fi
 
-# Get the Tailscale hostname for this device
-TS_HOSTNAME=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
-if [ -z "$TS_HOSTNAME" ] || [ "$TS_HOSTNAME" = "null" ]; then
-    echo -e "${RED}Could not determine Tailscale hostname.${NC}"
-    echo -e "${RED}Make sure Tailscale is authenticated and connected.${NC}"
-    exit 1
-fi
-echo -e "Tailscale hostname: ${CYAN}${TS_HOSTNAME}${NC}"
+echo "  ✓ Tailscale connected"
 
-echo ""
-echo -e "${GREEN}Step 5: Setting up Tailscale funnel...${NC}"
-# Enable HTTPS and funnel for the go2rtc API port
-echo -e "Enabling funnel on port $TAILSCALE_FUNNEL_PORT → localhost:$GO2RTC_API_PORT"
-tailscale funnel --bg --https=$TAILSCALE_FUNNEL_PORT http://localhost:$GO2RTC_API_PORT
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 5: Configure Tailscale Funnel
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[5/11] Configuring Tailscale Funnel...${NC}"
 
-# Construct the funnel URL
-FUNNEL_URL="https://${TS_HOSTNAME}"
-if [ "$TAILSCALE_FUNNEL_PORT" != "443" ]; then
-    FUNNEL_URL="https://${TS_HOSTNAME}:${TAILSCALE_FUNNEL_PORT}"
-fi
-echo -e "Funnel URL: ${CYAN}${FUNNEL_URL}${NC}"
+tailscale serve --bg --https=443 http://localhost:1984 2>/dev/null || true
+tailscale funnel 443 on 2>/dev/null || true
 
-echo ""
-echo -e "${GREEN}Step 6: Creating installation directory...${NC}"
+# Detect the funnel URL
+TS_DNS_NAME=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+TS_FUNNEL_URL="https://${TS_DNS_NAME}"
+echo "  ✓ Tailscale Funnel URL: ${TS_FUNNEL_URL}"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 6: Create install directory
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[6/11] Creating install directory...${NC}"
+
 mkdir -p "$INSTALL_DIR"
 chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+echo "  ✓ $INSTALL_DIR (owned by $SERVICE_USER)"
 
-echo ""
-echo -e "${GREEN}Step 7: Copying scripts...${NC}"
-cp "$SCRIPT_DIR/siyi_camera_controller.py" "$INSTALL_DIR/"
-cp "$SCRIPT_DIR/camera_stream_service.py" "$INSTALL_DIR/"
-chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"/*.py
-chmod +x "$INSTALL_DIR"/*.py
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 7: Copy camera_stream_service.py
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[7/11] Installing camera_stream_service.py...${NC}"
 
-echo ""
-echo -e "${GREEN}Step 8: Creating go2rtc configuration...${NC}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/camera_stream_service.py" ]; then
+    cp "$SCRIPT_DIR/camera_stream_service.py" "$INSTALL_DIR/camera_stream_service.py"
+else
+    echo -e "${RED}ERROR: camera_stream_service.py not found in $SCRIPT_DIR${NC}"
+    exit 1
+fi
+chmod +x "$INSTALL_DIR/camera_stream_service.py"
+chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/camera_stream_service.py"
+echo "  ✓ camera_stream_service.py installed"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 8: Write go2rtc.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[8/11] Writing go2rtc.yaml...${NC}"
+
 cat > "$INSTALL_DIR/go2rtc.yaml" << EOF
-# go2rtc configuration for SIYI A8 Mini camera
-# Managed by install_camera_services.sh — edit with care
-
 streams:
-  camera:
-    - $RTSP_URL
+  camera: ${RTSP_URL}
 
 api:
-  listen: ":$GO2RTC_API_PORT"
+  listen: ":1984"
 
 webrtc:
-  listen: ":$GO2RTC_WEBRTC_PORT"
+  listen: ":8555"
   candidates:
     - stun:8555
+
+rtsp:
+  listen: ""
+
+log:
+  level: info
 EOF
+
 chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/go2rtc.yaml"
+echo "  ✓ go2rtc.yaml written"
 
-echo ""
-echo -e "${GREEN}Step 9: Creating environment file...${NC}"
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 9: Write .env file
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[9/11] Writing .env file...${NC}"
+
 cat > "$INSTALL_DIR/.env" << EOF
-# Caribou Hub Configuration
-HUB_URL=$HUB_URL
-DRONE_ID=$DRONE_ID
-API_KEY=$API_KEY
-
-# SIYI Camera Configuration
-SIYI_CAMERA_IP=192.168.144.25
-SIYI_SDK_PORT=37260
-SIYI_RTSP_PORT=8554
-
-# go2rtc Configuration
-GO2RTC_API_PORT=$GO2RTC_API_PORT
-GO2RTC_WEBRTC_PORT=$GO2RTC_WEBRTC_PORT
-RTSP_URL=$RTSP_URL
-STREAM_TYPE=$STREAM_TYPE
-
-# Tailscale Funnel
-# The funnel URL is auto-detected by camera_stream_service.py
-# but stored here for reference
-TAILSCALE_FUNNEL_URL=$FUNNEL_URL
-TAILSCALE_HOSTNAME=$TS_HOSTNAME
+HUB_URL=${HUB_URL}
+DRONE_ID=${DRONE_ID}
+API_KEY=${API_KEY}
+RTSP_URL=${RTSP_URL}
+GO2RTC_API_PORT=1984
+GO2RTC_WEBRTC_PORT=8555
+TAILSCALE_FUNNEL_URL=${TS_FUNNEL_URL}
+TAILSCALE_HOSTNAME=${TS_DNS_NAME}
 EOF
-chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/.env"
+
 chmod 600 "$INSTALL_DIR/.env"
+chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/.env"
+echo "  ✓ .env written (mode 600)"
 
-echo ""
-echo -e "${GREEN}Step 10: Installing systemd services...${NC}"
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 10: Write systemd unit files
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[10/11] Writing systemd unit files...${NC}"
 
-# go2rtc service
+# go2rtc.service
 cat > /etc/systemd/system/go2rtc.service << EOF
 [Unit]
-Description=go2rtc WebRTC Streaming Server
+Description=go2rtc — RTSP to WebRTC streaming
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$GO2RTC_BIN -config $INSTALL_DIR/go2rtc.yaml
+User=${SERVICE_USER}
+ExecStart=/usr/local/bin/go2rtc -config ${INSTALL_DIR}/go2rtc.yaml
 Restart=always
 RestartSec=5
-Environment=PYTHONUNBUFFERED=1
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=go2rtc
 
 [Install]
 WantedBy=multi-user.target
 EOF
+echo "  ✓ go2rtc.service"
 
-# Tailscale funnel service (persistent, survives reboots)
+# tailscale-funnel.service
 cat > /etc/systemd/system/tailscale-funnel.service << EOF
 [Unit]
-Description=Tailscale Funnel for go2rtc WebRTC Signaling
-After=network-online.target tailscaled.service go2rtc.service
-Wants=network-online.target
-Requires=tailscaled.service
+Description=Tailscale Funnel — expose go2rtc API publicly
+After=tailscaled.service go2rtc.service
+Wants=tailscaled.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/tailscale funnel --bg --https=$TAILSCALE_FUNNEL_PORT http://localhost:$GO2RTC_API_PORT
-ExecStop=/usr/bin/tailscale funnel --https=$TAILSCALE_FUNNEL_PORT off
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=tailscale-funnel
+ExecStart=/usr/bin/tailscale funnel --bg --https=443 http://localhost:1984
+ExecStop=/usr/bin/tailscale funnel --https=443 off
 
 [Install]
 WantedBy=multi-user.target
 EOF
+echo "  ✓ tailscale-funnel.service"
 
-# Camera controller service (SIYI gimbal control via Socket.IO)
-cat > /etc/systemd/system/siyi-camera.service << EOF
-[Unit]
-Description=SIYI A8 Mini Camera Controller Service
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$INSTALL_DIR
-EnvironmentFile=$INSTALL_DIR/.env
-ExecStart=/usr/bin/python3 $INSTALL_DIR/siyi_camera_controller.py --hub-url \${HUB_URL} --drone-id \${DRONE_ID} --api-key \${API_KEY}
-Restart=always
-RestartSec=10
-Environment=PYTHONUNBUFFERED=1
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=siyi-camera
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Camera stream management service (manages go2rtc + registers with Hub)
+# camera-stream.service
 cat > /etc/systemd/system/camera-stream.service << EOF
 [Unit]
-Description=Camera Stream Manager (go2rtc + Tailscale + Hub Registration)
-After=network-online.target go2rtc.service tailscale-funnel.service
-Wants=network-online.target
+Description=Caribou Camera Stream Service — health monitor + Hub registration
+After=go2rtc.service tailscale-funnel.service
 Requires=go2rtc.service
 
 [Service]
 Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$INSTALL_DIR
-EnvironmentFile=$INSTALL_DIR/.env
-ExecStart=/usr/bin/python3 $INSTALL_DIR/camera_stream_service.py \\
-    --stream \${STREAM_TYPE} \\
+User=${SERVICE_USER}
+EnvironmentFile=${INSTALL_DIR}/.env
+ExecStart=/usr/bin/python3 ${INSTALL_DIR}/camera_stream_service.py \\
+    --rtsp-url \${RTSP_URL} \\
     --hub-url \${HUB_URL} \\
     --drone-id \${DRONE_ID} \\
     --api-key \${API_KEY} \\
-    --go2rtc-api http://localhost:\${GO2RTC_API_PORT}
+    --api-port \${GO2RTC_API_PORT} \\
+    --webrtc-port \${GO2RTC_WEBRTC_PORT}
 Restart=always
 RestartSec=10
-Environment=PYTHONUNBUFFERED=1
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=camera-stream
 
 [Install]
 WantedBy=multi-user.target
 EOF
+echo "  ✓ camera-stream.service"
 
-echo ""
-echo -e "${GREEN}Step 11: Enabling and starting services...${NC}"
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 11: Enable and start services
+# ═══════════════════════════════════════════════════════════════════════════════
+echo -e "${GREEN}[11/11] Enabling and starting services...${NC}"
+
 systemctl daemon-reload
-systemctl enable go2rtc.service
-systemctl enable tailscale-funnel.service
-systemctl enable siyi-camera.service
-systemctl enable camera-stream.service
-
+systemctl enable go2rtc.service tailscale-funnel.service camera-stream.service
 systemctl start go2rtc.service
-sleep 2  # Give go2rtc a moment to start
+sleep 2
 systemctl start tailscale-funnel.service
 sleep 1
-systemctl start siyi-camera.service
 systemctl start camera-stream.service
 
+echo "  ✓ All services enabled and started"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Done
+# ═══════════════════════════════════════════════════════════════════════════════
 echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Installation Complete!${NC}"
-echo -e "${GREEN}========================================${NC}"
+echo -e "${CYAN}╔══════════════════════════════════════════════════════════════╗"
+echo -e "║              Installation Complete!                           ║"
+echo -e "╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "Architecture:"
-echo -e "  RTSP Camera → go2rtc (WebRTC) → Tailscale Funnel → Browser"
-echo -e ""
-echo -e "Services installed:"
-echo -e "  - go2rtc.service             (RTSP → WebRTC streaming server)"
-echo -e "  - tailscale-funnel.service   (Exposes go2rtc API to internet)"
-echo -e "  - siyi-camera.service        (Camera gimbal controller via Socket.IO)"
-echo -e "  - camera-stream.service      (Manages go2rtc + registers with Hub)"
+echo "Services:"
+echo "  • go2rtc.service          — RTSP → WebRTC transcoding"
+echo "  • tailscale-funnel.service — Public HTTPS tunnel"
+echo "  • camera-stream.service   — Health monitor + Hub registration"
 echo ""
-echo -e "Startup order: go2rtc → tailscale-funnel → camera-stream"
+echo "WHEP URL: ${TS_FUNNEL_URL}/api/webrtc?src=camera"
 echo ""
-echo -e "Key URLs:"
-echo -e "  Local go2rtc API:    ${CYAN}http://localhost:$GO2RTC_API_PORT${NC}"
-echo -e "  Local go2rtc WebUI:  ${CYAN}http://localhost:$GO2RTC_API_PORT${NC}"
-echo -e "  Tailscale Funnel:    ${CYAN}${FUNNEL_URL}${NC}"
-echo -e "  WebRTC signaling:    ${CYAN}${FUNNEL_URL}/api/webrtc?src=camera${NC}"
+echo "Useful commands:"
+echo "  systemctl status go2rtc camera-stream"
+echo "  journalctl -u camera-stream -f"
+echo "  curl http://localhost:1984/api/streams"
 echo ""
-echo -e "Useful commands:"
-echo -e "  ${YELLOW}sudo systemctl status go2rtc${NC}             - Check go2rtc status"
-echo -e "  ${YELLOW}sudo systemctl status tailscale-funnel${NC}   - Check funnel status"
-echo -e "  ${YELLOW}sudo systemctl status siyi-camera${NC}        - Check camera controller"
-echo -e "  ${YELLOW}sudo systemctl status camera-stream${NC}      - Check stream manager"
-echo -e "  ${YELLOW}sudo journalctl -u go2rtc -f${NC}             - View go2rtc logs"
-echo -e "  ${YELLOW}sudo journalctl -u camera-stream -f${NC}      - View stream manager logs"
-echo -e "  ${YELLOW}tailscale funnel status${NC}                   - View funnel status"
-echo -e "  ${YELLOW}tailscale status${NC}                          - View Tailscale status"
-echo ""
-echo -e "${YELLOW}Note:${NC} The camera_stream_service.py auto-detects the Tailscale"
-echo -e "funnel URL and registers it with the Caribou Hub. No manual URL"
-echo -e "configuration is needed per drone."
+echo "Files:"
+echo "  ${INSTALL_DIR}/camera_stream_service.py"
+echo "  ${INSTALL_DIR}/go2rtc.yaml"
+echo "  ${INSTALL_DIR}/.env"
 echo ""

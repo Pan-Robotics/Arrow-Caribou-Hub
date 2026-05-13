@@ -1530,3 +1530,22 @@
 - [x] Add motor_temp_c field to ArmData interface
 - [x] Display motor temperature in HexStructuralView
 - [x] Remove FC block from center of structural view
+
+## Camera Feed — Multi-Stream Generic Application
+- [x] Hub REST: POST /api/rest/camera/stream-register (companion registers WHEP URL)
+- [x] Hub REST: POST /api/rest/camera/stream-unregister (companion deregisters)
+- [x] Hub REST: GET /api/rest/camera/stream-status/:droneId (poll endpoint)
+- [x] Hub REST: POST /api/rest/camera/whep-proxy/:droneId (SDP relay for drone streams)
+- [x] Hub REST: POST /api/rest/camera/whep-proxy-url (SDP relay for manual URL streams)
+- [x] WebSocket: broadcastCameraStream via org-scoped camera rooms
+- [x] Frontend: CameraFeedApp with multi-stream grid (responsive 1/2/3 cols)
+- [x] Frontend: AddStreamDialog (drone picker + manual URL tabs)
+- [x] Frontend: StreamWidget with WebRTC connection, stats, quality bars
+- [x] Frontend: Drag-and-drop reorder of stream tiles
+- [x] Frontend: Per-stream settings popover (label, source change)
+- [x] Frontend: Fullscreen toggle per stream
+- [x] Frontend: localStorage persistence of stream configs
+- [x] Frontend: connectWebRTC() helper with ICE gathering, SDP relay, stats polling
+- [x] Companion: camera_stream_service.py (go2rtc manager + Hub registration + heartbeat)
+- [x] Companion: install_camera_services.sh (interactive installer)
+- [x] Companion: systemd service files (go2rtc, tailscale-funnel, camera-stream)

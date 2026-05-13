@@ -1,114 +1,59 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { 
-  Camera, 
-  Video, 
-  Home, 
-  ArrowDown,
-  ChevronUp,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Circle,
-  Minus,
-  Plus,
-  Settings,
-  Maximize2,
-  Activity,
-  VideoOff,
-  Loader2,
-  Wifi,
-  WifiOff,
-  RefreshCw,
-  Gauge
-} from "lucide-react";
-import { io, Socket } from "socket.io-client";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useDroneSelection } from "@/hooks/useDroneSelection";
-import { ConnectionStatus } from "@/components/ui/ConnectionStatus";
+import { useStreamConfigStorage } from "@/hooks/useStreamConfigStorage";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Radio,
+  Plus,
+  Loader2,
+  VideoOff,
+  Maximize2,
+  Minimize2,
+  Settings,
+  X,
+  GripVertical,
+} from "lucide-react";
 
-// Camera status interface
-interface CameraStatus {
-  connected: boolean;
-  yaw: number;
-  pitch: number;
-  roll: number;
-  zoom: number;
-  recording: boolean;
-  streamActive: boolean;
-}
+// ─── Types ─────────────────────────────────────────────────────────────────
 
-// WebRTC stats for latency indicator
-interface WebRTCStats {
-  rtt: number | null;          // Round-trip time in ms
-  jitter: number | null;       // Jitter in ms
-  bitrate: number | null;      // Incoming video bitrate in kbps
-  packetsLost: number | null;  // Total packets lost
-  framesPerSecond: number | null; // Current FPS
-  resolution: { width: number; height: number } | null;
-  codec: string | null;
-  transportType: string | null; // "udp" or "tcp" (relay vs direct)
-}
+import type { StreamConfig } from "@/hooks/useStreamConfigStorage";
 
-// Connection quality levels
-type ConnectionQuality = "excellent" | "good" | "fair" | "poor" | "unknown";
+type StreamSource =
+  | { type: "drone"; droneId: string }
+  | { type: "url"; url: string };
 
-function getConnectionQuality(stats: WebRTCStats): ConnectionQuality {
-  if (stats.rtt === null) return "unknown";
-  if (stats.rtt < 50 && (stats.jitter === null || stats.jitter < 10)) return "excellent";
-  if (stats.rtt < 150 && (stats.jitter === null || stats.jitter < 30)) return "good";
-  if (stats.rtt < 300 && (stats.jitter === null || stats.jitter < 50)) return "fair";
-  return "poor";
-}
+type ConnState = "idle" | "connecting" | "connected" | "error";
 
-function getQualityColor(quality: ConnectionQuality): string {
-  switch (quality) {
-    case "excellent": return "text-green-400";
-    case "good": return "text-emerald-400";
-    case "fair": return "text-yellow-400";
-    case "poor": return "text-red-400";
-    default: return "text-zinc-500";
-  }
-}
 
-function getQualityBars(quality: ConnectionQuality): number {
-  switch (quality) {
-    case "excellent": return 4;
-    case "good": return 3;
-    case "fair": return 2;
-    case "poor": return 1;
-    default: return 0;
-  }
-}
 
-function formatBitrate(kbps: number | null): string {
-  if (kbps === null) return "--";
-  if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
-  return `${Math.round(kbps)} kbps`;
-}
+// ─── WebRTC Helper ─────────────────────────────────────────────────────────
 
-// Command types for gimbal control
-type GimbalCommand = 
-  | { type: "rotate"; yawSpeed: number; pitchSpeed: number }
-  | { type: "setAngles"; yaw: number; pitch: number }
-  | { type: "center" }
-  | { type: "nadir" }
-  | { type: "zoom"; level: number }
-  | { type: "photo" }
-  | { type: "recordToggle" };
-
-/**
- * Connect to a go2rtc WebRTC stream using the WHEP-like signaling API.
- */
 async function connectWebRTC(
-  droneId: string,
-  videoElement: HTMLVideoElement,
+  url: string,
+  videoEl: HTMLVideoElement,
   onConnected: () => void,
-  onDisconnected: (reason: string) => void,
+  onDisconnected: (reason: string) => void
 ): Promise<RTCPeerConnection> {
   const pc = new RTCPeerConnection({
     iceServers: [
@@ -118,52 +63,38 @@ async function connectWebRTC(
     iceCandidatePoolSize: 4,
   });
 
-  // Add receive-only transceivers for video and audio
+  // Receive-only transceivers
   pc.addTransceiver("video", { direction: "recvonly" });
   pc.addTransceiver("audio", { direction: "recvonly" });
 
-  // Handle incoming media stream
+  // Track handler
   pc.ontrack = (event) => {
-    if (event.streams.length > 0) {
-      videoElement.srcObject = event.streams[0];
+    if (event.streams[0]) {
+      videoEl.srcObject = event.streams[0];
       onConnected();
     }
   };
 
-  // Monitor connection state
+  // Connection state monitoring
   pc.onconnectionstatechange = () => {
-    switch (pc.connectionState) {
-      case "connected":
-        onConnected();
-        break;
-      case "disconnected":
-        onDisconnected("Connection lost");
-        break;
-      case "failed":
-        onDisconnected("Connection failed");
-        break;
-      case "closed":
-        onDisconnected("Connection closed");
-        break;
+    const s = pc.connectionState;
+    if (s === "disconnected" || s === "failed" || s === "closed") {
+      onDisconnected(`Connection ${s}`);
     }
   };
-
   pc.oniceconnectionstatechange = () => {
     if (pc.iceConnectionState === "failed") {
-      onDisconnected("ICE negotiation failed — NAT traversal may be blocked");
+      onDisconnected("ICE negotiation failed");
     }
   };
 
-  // Create and set local offer
+  // Create offer
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  // Wait for ICE gathering to complete (or timeout after 3s)
+  // Wait for ICE gathering (max 3s)
   await new Promise<void>((resolve) => {
-    if (pc.iceGatheringState === "complete") {
-      resolve();
-      return;
-    }
+    if (pc.iceGatheringState === "complete") return resolve();
     const timeout = setTimeout(resolve, 3000);
     pc.onicegatheringstatechange = () => {
       if (pc.iceGatheringState === "complete") {
@@ -173,931 +104,645 @@ async function connectWebRTC(
     };
   });
 
-  // Send offer via server-side WHEP proxy (browser cannot reach Tailscale directly)
-  const response = await fetch(`/api/rest/camera/whep-proxy/${droneId}`, {
+  // Send SDP offer to server
+  const sdpOffer = pc.localDescription!.sdp;
+  const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/sdp" },
-    body: pc.localDescription?.sdp,
+    body: sdpOffer,
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`WebRTC signaling failed (${response.status}): ${text}`);
+    const errText = await response.text().catch(() => "");
+    throw new Error(`WHEP proxy returned ${response.status}: ${errText.slice(0, 200)}`);
   }
 
-  // Set remote answer
-  const answerSdp = await response.text();
-  await pc.setRemoteDescription(new RTCSessionDescription({
-    type: "answer",
-    sdp: answerSdp,
-  }));
+  const sdpAnswer = await response.text();
+  await pc.setRemoteDescription({ type: "answer", sdp: sdpAnswer });
 
   return pc;
 }
 
-/**
- * Signal quality bars component
- */
-function QualityBars({ quality }: { quality: ConnectionQuality }) {
-  const bars = getQualityBars(quality);
-  const color = getQualityColor(quality);
+// ─── Quality helpers ───────────────────────────────────────────────────────
+
+type Quality = "excellent" | "good" | "fair" | "poor" | "unknown";
+
+function getQuality(rtt: number | null): Quality {
+  if (rtt === null) return "unknown";
+  if (rtt < 50) return "excellent";
+  if (rtt < 100) return "good";
+  if (rtt < 200) return "fair";
+  return "poor";
+}
+
+function QualityBars({ quality }: { quality: Quality }) {
+  const levels = { excellent: 4, good: 3, fair: 2, poor: 1, unknown: 0 };
+  const colors = { excellent: "bg-green-400", good: "bg-green-400", fair: "bg-yellow-400", poor: "bg-red-400", unknown: "bg-zinc-500" };
+  const filled = levels[quality];
+  const color = colors[quality];
+
   return (
-    <div className="flex items-end gap-[2px] h-4">
-      {[1, 2, 3, 4].map((level) => (
+    <div className="flex items-end gap-[2px] h-3">
+      {[1, 2, 3, 4].map((i) => (
         <div
-          key={level}
-          className={`w-[3px] rounded-sm transition-colors ${
-            level <= bars ? color.replace("text-", "bg-") : "bg-zinc-600"
-          }`}
-          style={{ height: `${level * 25}%` }}
+          key={i}
+          className={`w-[3px] rounded-sm ${i <= filled ? color : "bg-zinc-600"}`}
+          style={{ height: `${i * 25}%` }}
         />
       ))}
     </div>
   );
 }
 
-/**
- * Latency indicator overlay component
- */
-function LatencyIndicator({ stats, showDetails }: { stats: WebRTCStats; showDetails: boolean }) {
-  const quality = getConnectionQuality(stats);
-  const qualityColor = getQualityColor(quality);
+// ─── Grid helper ───────────────────────────────────────────────────────────
 
-  if (!showDetails) {
-    // Compact mode: just the quality bars + RTT in the video overlay
-    return (
-      <div className="flex items-center gap-2 bg-black/60 backdrop-blur-sm px-2.5 py-1 rounded">
-        <QualityBars quality={quality} />
-        <span className={`text-xs font-mono ${qualityColor}`}>
-          {stats.rtt !== null ? `${Math.round(stats.rtt)}ms` : "--"}
-        </span>
-      </div>
-    );
-  }
-
-  // Expanded mode: full stats panel
-  return (
-    <div className="bg-black/80 backdrop-blur-sm rounded-lg p-3 min-w-[200px]">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-2 pb-2 border-b border-zinc-700">
-        <div className="flex items-center gap-2">
-          <QualityBars quality={quality} />
-          <span className={`text-xs font-semibold uppercase ${qualityColor}`}>
-            {quality}
-          </span>
-        </div>
-        {stats.transportType && (
-          <span className="text-[10px] font-mono text-zinc-500 uppercase">
-            {stats.transportType}
-          </span>
-        )}
-      </div>
-
-      {/* Stats grid */}
-      <div className="space-y-1.5 text-xs">
-        <div className="flex justify-between">
-          <span className="text-zinc-400">RTT</span>
-          <span className={`font-mono ${qualityColor}`}>
-            {stats.rtt !== null ? `${Math.round(stats.rtt)} ms` : "--"}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-400">Jitter</span>
-          <span className="font-mono text-zinc-200">
-            {stats.jitter !== null ? `${stats.jitter.toFixed(1)} ms` : "--"}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-400">Bitrate</span>
-          <span className="font-mono text-zinc-200">
-            {formatBitrate(stats.bitrate)}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-400">FPS</span>
-          <span className="font-mono text-zinc-200">
-            {stats.framesPerSecond !== null ? Math.round(stats.framesPerSecond) : "--"}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-400">Resolution</span>
-          <span className="font-mono text-zinc-200">
-            {stats.resolution ? `${stats.resolution.width}x${stats.resolution.height}` : "--"}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-zinc-400">Codec</span>
-          <span className="font-mono text-zinc-200">
-            {stats.codec || "--"}
-          </span>
-        </div>
-        {stats.packetsLost !== null && stats.packetsLost > 0 && (
-          <div className="flex justify-between">
-            <span className="text-zinc-400">Pkt Lost</span>
-            <span className="font-mono text-red-400">
-              {stats.packetsLost}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+function gridCols(count: number): string {
+  if (count === 1) return "grid-cols-1";
+  if (count <= 4) return "grid-cols-2";
+  return "grid-cols-3";
 }
 
-export default function CameraFeedApp() {
-  // Drone selection via shared hook
-  const { selectedDrone, setSelectedDrone, drones, isLoading: dronesLoading } = useDroneSelection("camera");
+// ─── StreamWidget ──────────────────────────────────────────────────────────
 
-  // Camera state
-  const [status, setStatus] = useState<CameraStatus>({
-    connected: false,
-    yaw: 0,
-    pitch: 0,
-    roll: 0,
-    zoom: 1,
-    recording: false,
-    streamActive: false,
-  });
-  
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [webrtcUrl, setWebrtcUrl] = useState<string | null>(null);
-  const [streamError, setStreamError] = useState<string | null>(null);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showStatsDetails, setShowStatsDetails] = useState(false);
+interface StreamWidgetProps {
+  config: StreamConfig;
+  drones: Array<{ id: number; droneId: string; name: string | null }>;
+  onRemove: () => void;
+  onUpdate: (updated: StreamConfig) => void;
+  draggable: boolean;
+  onDragStart: () => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDrop: () => void;
+  isDragOver: boolean;
+}
+
+function StreamWidget({
+  config,
+  drones,
+  onRemove,
+  onUpdate,
+  draggable,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  isDragOver,
+}: StreamWidgetProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  const videoContainerRef = useRef<HTMLDivElement>(null);
-  
-  // WebRTC stats
-  const [webrtcStats, setWebrtcStats] = useState<WebRTCStats>({
-    rtt: null,
-    jitter: null,
-    bitrate: null,
-    packetsLost: null,
-    framesPerSecond: null,
-    resolution: null,
-    codec: null,
-    transportType: null,
-  });
+  const containerRef = useRef<HTMLDivElement>(null);
   const prevBytesRef = useRef<number>(0);
-  const prevTimestampRef = useRef<number>(0);
-  
-  // Gimbal control state (for continuous rotation while button held)
-  const rotationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const prevTsRef = useRef<number>(0);
+  const statsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Poll WebRTC stats every second
-  useEffect(() => {
-    const pc = pcRef.current;
-    if (!pc || pc.connectionState !== "connected") {
-      return;
+  const [connState, setConnState] = useState<ConnState>("idle");
+  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [rtt, setRtt] = useState<number | null>(null);
+  const [bitrate, setBitrate] = useState<number>(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [hovered, setHovered] = useState(false);
+
+  // Settings state
+  const [editTitle, setEditTitle] = useState(config.title);
+  const [editSourceType, setEditSourceType] = useState<"drone" | "url">(config.source.type);
+  const [editDroneId, setEditDroneId] = useState(config.source.type === "drone" ? config.source.droneId : "");
+  const [editUrl, setEditUrl] = useState(config.source.type === "url" ? config.source.url : "");
+
+  // Build signaling URL
+  const signalingUrl = useMemo(() => {
+    if (config.source.type === "drone") {
+      return `/api/rest/camera/whep-proxy/${config.source.droneId}`;
+    } else {
+      return `/api/rest/camera/whep-proxy-url?target=${encodeURIComponent(config.source.url || "")}`;
     }
+  }, [config.source]);
 
-    const interval = setInterval(async () => {
-      try {
-        const stats = await pc.getStats();
-        let rtt: number | null = null;
-        let jitter: number | null = null;
-        let packetsLost: number | null = null;
-        let framesPerSecond: number | null = null;
-        let resolution: { width: number; height: number } | null = null;
-        let codec: string | null = null;
-        let transportType: string | null = null;
-        let currentBytes = 0;
-        let currentTimestamp = 0;
-
-        // Collect codec IDs for lookup
-        const codecMap = new Map<string, string>();
-
-        stats.forEach((report) => {
-          // Get codec info
-          if (report.type === "codec" && report.mimeType) {
-            codecMap.set(report.id, report.mimeType.replace("video/", ""));
-          }
-
-          // Get candidate pair for RTT and transport type
-          if (report.type === "candidate-pair" && report.state === "succeeded") {
-            if (report.currentRoundTripTime !== undefined) {
-              rtt = report.currentRoundTripTime * 1000; // Convert to ms
-            }
-            // Check if using relay (TURN) or direct
-            if (report.remoteCandidateId) {
-              stats.forEach((r) => {
-                if (r.id === report.remoteCandidateId && r.type === "remote-candidate") {
-                  transportType = r.candidateType === "relay" ? "relay" : 
-                                  r.protocol === "tcp" ? "tcp" : "udp";
-                }
-              });
-            }
-          }
-
-          // Get inbound video stats
-          if (report.type === "inbound-rtp" && report.kind === "video") {
-            if (report.jitter !== undefined) {
-              jitter = report.jitter * 1000; // Convert to ms
-            }
-            if (report.packetsLost !== undefined) {
-              packetsLost = report.packetsLost;
-            }
-            if (report.framesPerSecond !== undefined) {
-              framesPerSecond = report.framesPerSecond;
-            }
-            if (report.frameWidth && report.frameHeight) {
-              resolution = { width: report.frameWidth, height: report.frameHeight };
-            }
-            if (report.bytesReceived !== undefined) {
-              currentBytes = report.bytesReceived;
-              currentTimestamp = report.timestamp;
-            }
-            // Get codec from codecId
-            if (report.codecId && codecMap.has(report.codecId)) {
-              codec = codecMap.get(report.codecId) || null;
-            }
-          }
-        });
-
-        // Calculate bitrate
-        let bitrate: number | null = null;
-        if (prevBytesRef.current > 0 && prevTimestampRef.current > 0 && currentBytes > 0) {
-          const bytesDiff = currentBytes - prevBytesRef.current;
-          const timeDiff = (currentTimestamp - prevTimestampRef.current) / 1000; // ms to s
-          if (timeDiff > 0) {
-            bitrate = (bytesDiff * 8) / timeDiff / 1000; // kbps
-          }
-        }
-        prevBytesRef.current = currentBytes;
-        prevTimestampRef.current = currentTimestamp;
-
-        setWebrtcStats({ rtt, jitter, bitrate, packetsLost, framesPerSecond, resolution, codec, transportType });
-      } catch {
-        // Stats collection failed, ignore
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [webrtcUrl, isConnecting, streamError]);
-
-  // Initialize WebSocket connection
-  useEffect(() => {
-    if (!selectedDrone) return;
-
-    // Reset state when switching drones
-    setStatus({
-      connected: false,
-      yaw: 0,
-      pitch: 0,
-      roll: 0,
-      zoom: 1,
-      recording: false,
-      streamActive: false,
-    });
-    setWebrtcUrl(null);
-    setStreamError(null);
-    setWebrtcStats({
-      rtt: null, jitter: null, bitrate: null, packetsLost: null,
-      framesPerSecond: null, resolution: null, codec: null, transportType: null,
-    });
-
-    const socketInstance = io({
-      path: "/socket.io/",
-      timeout: 5000,
-    });
-
-    socketInstance.on("connect", () => {
-      console.log("Camera WebSocket connected");
-      socketInstance.emit("subscribe_camera", selectedDrone);
-    });
-
-    socketInstance.on("disconnect", () => {
-      console.log("Camera WebSocket disconnected");
-      setStatus(prev => ({ ...prev, connected: false, streamActive: false }));
-    });
-
-    // Listen for camera status updates
-    socketInstance.on("camera_status", (data: any) => {
-      setStatus(prev => ({
-        ...prev,
-        connected: data.connected ?? prev.connected,
-        yaw: data.attitude?.yaw ?? prev.yaw,
-        pitch: data.attitude?.pitch ?? prev.pitch,
-        roll: data.attitude?.roll ?? prev.roll,
-        zoom: data.zoom_level ?? prev.zoom,
-        recording: data.recording ?? prev.recording,
-      }));
-    });
-
-    // Listen for WebRTC stream URL updates from server
-    socketInstance.on("camera_stream", (data: { url: string | null }) => {
-      console.log("[Camera] WebRTC URL received:", data.url);
-      if (data.url) {
-        setWebrtcUrl(data.url);
-        setStatus(prev => ({ ...prev, streamActive: true }));
-      } else {
-        setWebrtcUrl(null);
-        setStatus(prev => ({ ...prev, streamActive: false }));
-      }
-    });
-
-    socketInstance.on("connect_error", (error) => {
-      console.warn("Camera WebSocket error:", error);
-      setStatus(prev => ({ ...prev, connected: false }));
-    });
-
-    setSocket(socketInstance);
-
-    // Also poll for stream status on initial load
-    fetch(`/api/rest/camera/stream-status/${selectedDrone}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.active && data.webrtc_url) {
-          setWebrtcUrl(data.webrtc_url);
-          setStatus(prev => ({ ...prev, streamActive: true }));
-        }
-      })
-      .catch(() => { /* ignore polling errors */ });
-
-    return () => {
-      socketInstance.emit("unsubscribe_camera", selectedDrone);
-      socketInstance.disconnect();
-    };
-  }, [selectedDrone]);
-
-  // WebRTC connection - connect/disconnect when webrtcUrl changes
-  // The webrtcUrl is still used as a trigger (non-null = stream is registered),
-  // but the actual signaling goes through the server-side WHEP proxy.
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    // Cleanup previous peer connection
+  // Connect WebRTC
+  const connect = useCallback(async () => {
+    if (!videoRef.current) return;
+    // Cleanup existing
     if (pcRef.current) {
       pcRef.current.close();
       pcRef.current = null;
     }
-    video.srcObject = null;
-    prevBytesRef.current = 0;
-    prevTimestampRef.current = 0;
-    setWebrtcStats({
-      rtt: null, jitter: null, bitrate: null, packetsLost: null,
-      framesPerSecond: null, resolution: null, codec: null, transportType: null,
-    });
+    setConnState("connecting");
+    setErrorMsg("");
+    setRtt(null);
+    setBitrate(0);
 
-    if (!webrtcUrl || !selectedDrone) {
-      return;
+    try {
+      const pc = await connectWebRTC(
+        signalingUrl,
+        videoRef.current,
+        () => setConnState("connected"),
+        (reason) => {
+          setConnState("error");
+          setErrorMsg(reason);
+        }
+      );
+      pcRef.current = pc;
+    } catch (err: any) {
+      setConnState("error");
+      setErrorMsg(err?.message || "Connection failed");
     }
+  }, [signalingUrl]);
 
-    setStreamError(null);
-    setIsConnecting(true);
-
-    let cancelled = false;
-
-    connectWebRTC(
-      selectedDrone,
-      video,
-      () => {
-        // onConnected
-        if (!cancelled) {
-          setIsConnecting(false);
-          setStreamError(null);
-          video.play().catch(() => {
-            console.warn("[WebRTC] Autoplay blocked");
-          });
-        }
-      },
-      (reason) => {
-        // onDisconnected
-        if (!cancelled) {
-          setStreamError(reason);
-          setStatus(prev => ({ ...prev, streamActive: false }));
-        }
-      },
-    )
-      .then((pc) => {
-        if (cancelled) {
-          pc.close();
-        } else {
-          pcRef.current = pc;
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          console.error("[WebRTC] Connection error:", err);
-          setStreamError(err.message || "Failed to connect to WebRTC stream");
-          setIsConnecting(false);
-        }
-      });
-
+  // Auto-connect on mount and source change
+  useEffect(() => {
+    connect();
     return () => {
-      cancelled = true;
       if (pcRef.current) {
         pcRef.current.close();
         pcRef.current = null;
       }
+      if (statsIntervalRef.current) {
+        clearInterval(statsIntervalRef.current);
+      }
     };
-  }, [webrtcUrl, selectedDrone]);
+  }, [connect]);
 
-  // Send command to camera via WebSocket
-  const sendCommand = useCallback((command: GimbalCommand) => {
-    if (socket?.connected && selectedDrone) {
-      socket.emit("camera_command", { droneId: selectedDrone, command });
+  // Stats polling
+  useEffect(() => {
+    if (connState === "connected" && pcRef.current) {
+      statsIntervalRef.current = setInterval(async () => {
+        if (!pcRef.current) return;
+        try {
+          const stats = await pcRef.current.getStats();
+          stats.forEach((report) => {
+            if (report.type === "candidate-pair" && report.state === "succeeded" && report.currentRoundTripTime != null) {
+              setRtt(Math.round(report.currentRoundTripTime * 1000));
+            }
+            if (report.type === "inbound-rtp" && report.kind === "video") {
+              const now = Date.now();
+              const bytes = report.bytesReceived || 0;
+              if (prevTsRef.current > 0) {
+                const dt = (now - prevTsRef.current) / 1000;
+                if (dt > 0) {
+                  const kbps = ((bytes - prevBytesRef.current) * 8) / dt / 1000;
+                  setBitrate(Math.round(kbps));
+                }
+              }
+              prevBytesRef.current = bytes;
+              prevTsRef.current = now;
+            }
+          });
+        } catch { /* ignore */ }
+      }, 1500);
     }
-  }, [socket, selectedDrone]);
+    return () => {
+      if (statsIntervalRef.current) {
+        clearInterval(statsIntervalRef.current);
+        statsIntervalRef.current = null;
+      }
+    };
+  }, [connState]);
 
-  // Gimbal rotation handlers (continuous while held)
-  const startRotation = useCallback((yawSpeed: number, pitchSpeed: number) => {
-    sendCommand({ type: "rotate", yawSpeed, pitchSpeed });
-    rotationIntervalRef.current = setInterval(() => {
-      sendCommand({ type: "rotate", yawSpeed, pitchSpeed });
-    }, 100);
-  }, [sendCommand]);
-
-  const stopRotation = useCallback(() => {
-    if (rotationIntervalRef.current) {
-      clearInterval(rotationIntervalRef.current);
-      rotationIntervalRef.current = null;
-    }
-    sendCommand({ type: "rotate", yawSpeed: 0, pitchSpeed: 0 });
-  }, [sendCommand]);
-
-  // Zoom handler
-  const handleZoomChange = useCallback((value: number[]) => {
-    const zoomLevel = value[0];
-    setStatus(prev => ({ ...prev, zoom: zoomLevel }));
-    sendCommand({ type: "zoom", level: zoomLevel });
-  }, [sendCommand]);
-
-  // Action handlers
-  const handlePhoto = useCallback(() => {
-    sendCommand({ type: "photo" });
-  }, [sendCommand]);
-
-  const handleRecordToggle = useCallback(() => {
-    sendCommand({ type: "recordToggle" });
-    setStatus(prev => ({ ...prev, recording: !prev.recording }));
-  }, [sendCommand]);
-
-  const handleCenter = useCallback(() => {
-    sendCommand({ type: "center" });
-    setStatus(prev => ({ ...prev, yaw: 0, pitch: 0 }));
-  }, [sendCommand]);
-
-  const handleNadir = useCallback(() => {
-    sendCommand({ type: "nadir" });
-    setStatus(prev => ({ ...prev, yaw: 0, pitch: -90 }));
-  }, [sendCommand]);
-
-  // Fullscreen toggle
+  // Fullscreen
   const toggleFullscreen = useCallback(() => {
-    if (!videoContainerRef.current) return;
+    if (!containerRef.current) return;
     if (!document.fullscreenElement) {
-      videoContainerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+      containerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
     } else {
       document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
     }
   }, []);
 
-  // Retry stream connection
-  const retryStream = useCallback(() => {
-    if (!selectedDrone) return;
-    setStreamError(null);
-    setIsConnecting(true);
-    
-    // Close existing connection
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
-    }
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
 
-    // Re-poll for stream status
-    fetch(`/api/rest/camera/stream-status/${selectedDrone}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.active && data.webrtc_url) {
-          // Force re-connect by toggling URL
-          setWebrtcUrl(null);
-          setTimeout(() => setWebrtcUrl(data.webrtc_url), 100);
-          setStatus(prev => ({ ...prev, streamActive: true }));
-        } else {
-          setStreamError("No active stream found for this drone");
-          setIsConnecting(false);
-        }
-      })
-      .catch(() => {
-        setStreamError("Failed to check stream status");
-        setIsConnecting(false);
-      });
-  }, [selectedDrone]);
+  // Apply settings
+  const applySettings = () => {
+    const newSource: StreamConfig["source"] =
+      editSourceType === "drone"
+        ? { type: "drone", droneId: editDroneId || "" }
+        : { type: "url", url: editUrl };
+    onUpdate({ ...config, title: editTitle, source: newSource });
+    setShowSettings(false);
+  };
 
-  const isStreamLive = webrtcUrl && !streamError && !isConnecting;
+  const quality = getQuality(rtt);
 
   return (
-    <div className="h-full flex flex-col bg-zinc-900">
-      {/* App Header */}
-      <div className="border-b border-zinc-700 bg-zinc-800 px-6 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div>
-              <h2 className="text-xl font-semibold text-white">Camera Feed</h2>
-              <p className="text-sm text-zinc-400">SIYI A8 mini Gimbal Camera</p>
+    <div
+      ref={containerRef}
+      className={`relative bg-zinc-950 rounded-lg overflow-hidden aspect-video transition-transform ${
+        isDragOver ? "ring-2 ring-primary scale-[0.98]" : ""
+      }`}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {/* Drag handle */}
+      <div className="absolute left-0 top-0 bottom-0 w-6 flex items-center justify-center z-20 cursor-grab opacity-20 hover:opacity-60 transition-opacity">
+        <GripVertical size={16} className="text-zinc-400" />
+      </div>
+
+      {/* Video element */}
+      <video
+        ref={videoRef}
+        className={`w-full h-full object-contain ${connState === "connected" ? "block" : "hidden"}`}
+        autoPlay
+        muted
+        playsInline
+      />
+
+      {/* Idle state */}
+      {connState === "idle" && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Radio size={48} className="text-zinc-600" />
+        </div>
+      )}
+
+      {/* Connecting state */}
+      {connState === "connecting" && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-10">
+          <Loader2 size={36} className="animate-spin text-blue-400 mb-2" />
+          <p className="text-sm text-zinc-300">Connecting...</p>
+        </div>
+      )}
+
+      {/* Error state */}
+      {connState === "error" && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-10">
+          <VideoOff size={36} className="text-red-400 mb-2" />
+          <p className="text-sm text-red-300 mb-2 max-w-[80%] text-center truncate">{errorMsg}</p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-zinc-600 text-white hover:bg-zinc-700"
+            onClick={connect}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {/* Top bar (hover reveal) */}
+      <div
+        className={`absolute top-0 left-0 right-0 bg-gradient-to-b from-black/70 to-transparent p-3 flex items-center justify-between z-20 transition-opacity ${
+          hovered || isFullscreen ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        <span className="text-sm text-white font-medium truncate max-w-[40%]">
+          {config.title}
+        </span>
+
+        <div className="flex items-center gap-2">
+          {connState === "connected" && (
+            <div className="flex items-center gap-1.5 text-xs text-zinc-300">
+              <QualityBars quality={quality} />
+              <span className="font-mono">{bitrate} kbps</span>
             </div>
-            {/* Stream status badge */}
-            {selectedDrone && (
-              <ConnectionStatus
-                socketConnected={socket?.connected ?? false}
-                lastDataAt={status.streamActive ? Date.now() : null}
-                label={status.streamActive ? "WebRTC Live" : "No Stream"}
-                staleThresholdSeconds={15}
-              />
-            )}
-          </div>
-          <div className="flex items-center gap-3">
-            {/* Drone Selector */}
-            {dronesLoading ? (
-              <div className="flex items-center gap-2">
-                <Loader2 className="animate-spin text-zinc-400" size={16} />
-                <span className="text-sm text-zinc-400">Loading drones...</span>
+          )}
+          {connState === "connecting" && (
+            <span className="text-xs text-blue-300 bg-blue-500/20 px-2 py-0.5 rounded">Connecting</span>
+          )}
+
+          {/* Settings popover */}
+          <Popover open={showSettings} onOpenChange={setShowSettings}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-300 hover:text-white">
+                <Settings size={14} />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              className="w-72 bg-zinc-800 border-zinc-700"
+              onInteractOutside={(e) => e.preventDefault()}
+            >
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs text-zinc-400">Label</label>
+                  <Input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    className="mt-1 bg-zinc-700 border-zinc-600 text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-zinc-400">Source</label>
+                  <Tabs value={editSourceType} onValueChange={(v) => setEditSourceType(v as "drone" | "url")} className="mt-1">
+                    <TabsList className="w-full bg-zinc-700">
+                      <TabsTrigger value="drone" className="flex-1 text-xs">Drone stream</TabsTrigger>
+                      <TabsTrigger value="url" className="flex-1 text-xs">Manual URL</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  {editSourceType === "drone" ? (
+                    <Select value={editDroneId} onValueChange={setEditDroneId}>
+                      <SelectTrigger className="mt-2 bg-zinc-700 border-zinc-600 text-white text-sm">
+                        <SelectValue placeholder="Select drone" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {drones.map((d) => (
+                          <SelectItem key={d.droneId} value={d.droneId}>
+                            {d.name || d.droneId}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      value={editUrl}
+                      onChange={(e) => setEditUrl(e.target.value)}
+                      placeholder="https://…/api/whep"
+                      className="mt-2 bg-zinc-700 border-zinc-600 text-white text-sm"
+                    />
+                  )}
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="ghost" size="sm" onClick={() => setShowSettings(false)} className="text-zinc-400">
+                    Cancel
+                  </Button>
+                  <Button size="sm" onClick={applySettings}>Apply</Button>
+                </div>
               </div>
-            ) : drones && drones.length > 0 ? (
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-zinc-400">Drone:</span>
-                <Select value={selectedDrone || undefined} onValueChange={setSelectedDrone}>
-                  <SelectTrigger className="w-[200px] bg-zinc-700 border-zinc-600 text-white">
+            </PopoverContent>
+          </Popover>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-zinc-300 hover:text-white"
+            onClick={toggleFullscreen}
+          >
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-zinc-300 hover:text-red-400"
+            onClick={onRemove}
+          >
+            <X size={14} />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── AddStreamDialog ───────────────────────────────────────────────────────
+
+interface AddStreamDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  drones: Array<{ id: number; droneId: string; name: string | null }>;
+  onAdd: (config: StreamConfig) => void;
+}
+
+function AddStreamDialog({ open, onOpenChange, drones, onAdd }: AddStreamDialogProps) {
+  const [sourceType, setSourceType] = useState<"drone" | "url">("drone");
+  const [selectedDrone, setSelectedDrone] = useState("");
+  const [manualUrl, setManualUrl] = useState("");
+  const [title, setTitle] = useState("");
+
+  // Reset on open
+  useEffect(() => {
+    if (open) {
+      setSourceType("drone");
+      setSelectedDrone("");
+      setManualUrl("");
+      setTitle("");
+    }
+  }, [open]);
+
+  const canAdd =
+    sourceType === "drone" ? selectedDrone.length > 0 : manualUrl.length > 0;
+
+  const handleAdd = () => {
+    const source: StreamSource =
+      sourceType === "drone"
+        ? { type: "drone", droneId: selectedDrone }
+        : { type: "url", url: manualUrl };
+
+    const defaultTitle =
+      sourceType === "drone"
+        ? drones.find((d) => d.droneId === selectedDrone)?.name || selectedDrone
+        : (() => {
+            try {
+              return new URL(manualUrl).hostname;
+            } catch {
+              return "Stream";
+            }
+          })();
+
+    onAdd({
+      id: crypto.randomUUID(),
+      title: title || defaultTitle,
+      source,
+    });
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-zinc-800 border-zinc-700 text-white max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Stream</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div>
+            <label className="text-sm text-zinc-400">Label (optional)</label>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="My Camera"
+              className="mt-1 bg-zinc-700 border-zinc-600 text-white"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm text-zinc-400">Source</label>
+            <Tabs value={sourceType} onValueChange={(v) => setSourceType(v as "drone" | "url")} className="mt-1">
+              <TabsList className="w-full bg-zinc-700">
+                <TabsTrigger value="drone" className="flex-1">Drone stream</TabsTrigger>
+                <TabsTrigger value="url" className="flex-1">Manual URL</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+
+          {sourceType === "drone" ? (
+            <div>
+              {drones.length > 0 ? (
+                <Select value={selectedDrone} onValueChange={setSelectedDrone}>
+                  <SelectTrigger className="bg-zinc-700 border-zinc-600 text-white">
                     <SelectValue placeholder="Select drone" />
                   </SelectTrigger>
                   <SelectContent>
-                    {drones.map((drone) => (
-                      <SelectItem key={drone.id} value={drone.droneId}>
-                        {drone.name || drone.droneId}
+                    {drones.map((d) => (
+                      <SelectItem key={d.droneId} value={d.droneId}>
+                        {d.name || d.droneId}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
-            ) : (
-              <div className="text-sm text-zinc-400">No drones registered</div>
-            )}
-
-            {/* Stats toggle button */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className={`text-zinc-400 hover:text-white ${showStatsDetails ? 'bg-zinc-700' : ''}`}
-                  onClick={() => setShowStatsDetails(prev => !prev)}
-                >
-                  <Gauge size={20} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{showStatsDetails ? "Hide" : "Show"} connection stats</p>
-              </TooltipContent>
-            </Tooltip>
-
-            <Button variant="ghost" size="icon" className="text-zinc-400 hover:text-white">
-              <Settings size={20} />
-            </Button>
-            <Button 
-              variant="ghost" 
-              size="icon" 
-              className="text-zinc-400 hover:text-white"
-              onClick={toggleFullscreen}
-            >
-              <Maximize2 size={20} />
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="flex-1 p-6 overflow-auto">
-        <div className="flex flex-col gap-4 max-w-6xl mx-auto">
-          
-          {/* Video Player */}
-          <Card className="bg-zinc-800 border-zinc-700 overflow-hidden">
-            <div ref={videoContainerRef} className="relative aspect-video bg-black">
-              {/* WebRTC Video Element */}
-              <video
-                ref={videoRef}
-                className={`w-full h-full object-contain ${webrtcUrl ? 'block' : 'hidden'}`}
-                autoPlay
-                muted
-                playsInline
-              />
-              
-              {/* Connecting overlay */}
-              {webrtcUrl && isConnecting && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 z-10">
-                  <Loader2 size={48} className="animate-spin text-blue-400 mb-3" />
-                  <p className="text-sm text-zinc-300">Establishing WebRTC connection...</p>
-                </div>
-              )}
-
-              {/* Error overlay */}
-              {webrtcUrl && streamError && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-10">
-                  <WifiOff size={48} className="text-red-400 mb-3" />
-                  <p className="text-sm text-red-300 mb-2">{streamError}</p>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    className="border-zinc-600 text-white hover:bg-zinc-700"
-                    onClick={retryStream}
-                  >
-                    <RefreshCw size={14} className="mr-1" /> Retry
-                  </Button>
-                </div>
-              )}
-
-              {/* No stream placeholder */}
-              {!webrtcUrl && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-500">
-                  <VideoOff size={64} className="mb-4" />
-                  <p className="text-lg font-medium">No Video Stream</p>
-                  <p className="text-sm text-zinc-600 mb-4">
-                    {selectedDrone 
-                      ? `Waiting for WebRTC stream from ${selectedDrone}...`
-                      : "Select a drone to view camera feed"
-                    }
-                  </p>
-                  {selectedDrone && (
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      className="border-zinc-600 text-zinc-300 hover:bg-zinc-700"
-                      onClick={retryStream}
-                    >
-                      <RefreshCw size={14} className="mr-1" /> Check for stream
-                    </Button>
-                  )}
-                </div>
-              )}
-              
-              {/* Video Overlay - Crosshair + Latency (only when stream is active) */}
-              {isStreamLive && (
-                <div className="absolute inset-0 pointer-events-none">
-                  {/* Center crosshair */}
-                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-                    <div className="w-8 h-[1px] bg-white/50" />
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[1px] h-8 bg-white/50" />
-                  </div>
-                  
-                  {/* Altitude indicator (top-left) */}
-                  <div className="absolute top-4 left-4 bg-black/50 px-3 py-1 rounded text-white text-sm font-mono">
-                    ALT: --m
-                  </div>
-
-                  {/* Latency indicator (top-right) */}
-                  <div 
-                    className="absolute top-4 right-4 pointer-events-auto cursor-pointer"
-                    onClick={() => setShowStatsDetails(prev => !prev)}
-                  >
-                    <LatencyIndicator stats={webrtcStats} showDetails={showStatsDetails} />
-                  </div>
-                  
-                  {/* Recording indicator */}
-                  {status.recording && (
-                    <div className="absolute top-4 right-4 flex items-center gap-2 bg-red-600/80 px-3 py-1 rounded" style={{ top: showStatsDetails ? "auto" : undefined, bottom: showStatsDetails ? "4rem" : undefined }}>
-                      <Circle className="w-3 h-3 fill-white text-white animate-pulse" />
-                      <span className="text-white text-sm font-medium">REC</span>
-                    </div>
-                  )}
-                </div>
+              ) : (
+                <p className="text-sm text-zinc-500">No drones with registered streams found.</p>
               )}
             </div>
-          </Card>
-
-          {/* Control Panels */}
-          <div className="grid grid-cols-3 gap-4">
-            
-            {/* Gimbal Control Panel */}
-            <Card className="bg-zinc-800 border-zinc-700 p-4">
-              <h3 className="text-sm font-medium text-zinc-400 mb-4 text-center">GIMBAL</h3>
-              <div className="flex flex-col items-center gap-2">
-                {/* Up button */}
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="w-12 h-12 rounded-full bg-zinc-700 border-zinc-600 hover:bg-zinc-600 text-white"
-                  onMouseDown={() => startRotation(0, 50)}
-                  onMouseUp={stopRotation}
-                  onMouseLeave={stopRotation}
-                  onTouchStart={() => startRotation(0, 50)}
-                  onTouchEnd={stopRotation}
-                >
-                  <ChevronUp size={24} />
-                </Button>
-                
-                {/* Middle row: Left, Center, Right */}
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="w-12 h-12 rounded-full bg-zinc-700 border-zinc-600 hover:bg-zinc-600 text-white"
-                    onMouseDown={() => startRotation(-50, 0)}
-                    onMouseUp={stopRotation}
-                    onMouseLeave={stopRotation}
-                    onTouchStart={() => startRotation(-50, 0)}
-                    onTouchEnd={stopRotation}
-                  >
-                    <ChevronLeft size={24} />
-                  </Button>
-                  
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="w-12 h-12 rounded-full bg-zinc-600 border-zinc-500 hover:bg-zinc-500 text-white"
-                    onClick={handleCenter}
-                  >
-                    <Circle size={16} className="fill-current" />
-                  </Button>
-                  
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="w-12 h-12 rounded-full bg-zinc-700 border-zinc-600 hover:bg-zinc-600 text-white"
-                    onMouseDown={() => startRotation(50, 0)}
-                    onMouseUp={stopRotation}
-                    onMouseLeave={stopRotation}
-                    onTouchStart={() => startRotation(50, 0)}
-                    onTouchEnd={stopRotation}
-                  >
-                    <ChevronRight size={24} />
-                  </Button>
-                </div>
-                
-                {/* Down button */}
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="w-12 h-12 rounded-full bg-zinc-700 border-zinc-600 hover:bg-zinc-600 text-white"
-                  onMouseDown={() => startRotation(0, -50)}
-                  onMouseUp={stopRotation}
-                  onMouseLeave={stopRotation}
-                  onTouchStart={() => startRotation(0, -50)}
-                  onTouchEnd={stopRotation}
-                >
-                  <ChevronDown size={24} />
-                </Button>
-              </div>
-            </Card>
-
-            {/* Zoom Control Panel */}
-            <Card className="bg-zinc-800 border-zinc-700 p-4">
-              <h3 className="text-sm font-medium text-zinc-400 mb-4 text-center">ZOOM</h3>
-              <div className="flex flex-col items-center gap-4">
-                <span className="text-2xl font-mono text-white">{status.zoom.toFixed(1)}x</span>
-                <div className="flex items-center gap-3 w-full">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="w-10 h-10 rounded-full bg-zinc-700 border-zinc-600 hover:bg-zinc-600 text-white"
-                    onClick={() => handleZoomChange([Math.max(1, status.zoom - 0.5)])}
-                  >
-                    <Minus size={18} />
-                  </Button>
-                  
-                  <Slider
-                    value={[status.zoom]}
-                    min={1}
-                    max={6}
-                    step={0.1}
-                    onValueChange={handleZoomChange}
-                    className="flex-1"
-                  />
-                  
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="w-10 h-10 rounded-full bg-zinc-700 border-zinc-600 hover:bg-zinc-600 text-white"
-                    onClick={() => handleZoomChange([Math.min(6, status.zoom + 0.5)])}
-                  >
-                    <Plus size={18} />
-                  </Button>
-                </div>
-              </div>
-            </Card>
-
-            {/* Status Panel */}
-            <Card className="bg-zinc-800 border-zinc-700 p-4">
-              <h3 className="text-sm font-medium text-zinc-400 mb-4 text-center">STATUS</h3>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">Yaw:</span>
-                  <span className="font-mono text-white">{status.yaw.toFixed(1)}°</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">Pitch:</span>
-                  <span className="font-mono text-white">{status.pitch.toFixed(1)}°</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">Recording:</span>
-                  <span className={`flex items-center gap-1 ${status.recording ? 'text-red-500' : 'text-zinc-500'}`}>
-                    <Circle className={`w-2 h-2 ${status.recording ? 'fill-red-500' : 'fill-zinc-500'}`} />
-                    {status.recording ? 'ON' : 'OFF'}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">Connected:</span>
-                  <span className={`flex items-center gap-1 ${status.connected ? 'text-green-500' : 'text-red-500'}`}>
-                    <Activity size={14} />
-                    {status.connected ? 'Yes' : 'No'}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">Stream:</span>
-                  <span className={`flex items-center gap-1 ${status.streamActive ? 'text-green-500' : 'text-zinc-500'}`}>
-                    {status.streamActive ? <Wifi size={14} /> : <WifiOff size={14} />}
-                    {status.streamActive ? 'WebRTC Active' : 'Inactive'}
-                  </span>
-                </div>
-                {/* Latency in status panel */}
-                {isStreamLive && webrtcStats.rtt !== null && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-zinc-400">Latency:</span>
-                    <span className={`flex items-center gap-1 font-mono ${getQualityColor(getConnectionQuality(webrtcStats))}`}>
-                      <QualityBars quality={getConnectionQuality(webrtcStats)} />
-                      {Math.round(webrtcStats.rtt)} ms
-                    </span>
-                  </div>
-                )}
-              </div>
-            </Card>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="grid grid-cols-4 gap-4">
-            <Button
-              variant="outline"
-              className="bg-zinc-800 border-zinc-700 hover:bg-zinc-700 text-white py-6"
-              onClick={handlePhoto}
-            >
-              <Camera size={20} className="mr-2" />
-              Photo
-            </Button>
-            
-            <Button
-              variant="outline"
-              className={`py-6 ${
-                status.recording 
-                  ? 'bg-red-600 border-red-500 hover:bg-red-700 text-white' 
-                  : 'bg-zinc-800 border-zinc-700 hover:bg-zinc-700 text-white'
-              }`}
-              onClick={handleRecordToggle}
-            >
-              <Video size={20} className="mr-2" />
-              {status.recording ? 'Stop' : 'Record'}
-            </Button>
-            
-            <Button
-              variant="outline"
-              className="bg-zinc-800 border-zinc-700 hover:bg-zinc-700 text-white py-6"
-              onClick={handleCenter}
-            >
-              <Home size={20} className="mr-2" />
-              Center
-            </Button>
-            
-            <Button
-              variant="outline"
-              className="bg-zinc-800 border-zinc-700 hover:bg-zinc-700 text-white py-6"
-              onClick={handleNadir}
-            >
-              <ArrowDown size={20} className="mr-2" />
-              Nadir
-            </Button>
-          </div>
-
-          {/* Connection Info */}
-          {selectedDrone && !status.connected && !status.streamActive && (
-            <Card className="bg-zinc-800/50 border-zinc-700 p-6 text-center">
-              <VideoOff className="mx-auto mb-4 text-zinc-500" size={48} />
-              <h3 className="text-lg font-medium text-white mb-2">Camera Not Connected</h3>
-              <p className="text-sm text-zinc-400 mb-4">
-                The SIYI A8 mini camera on <strong>{selectedDrone}</strong> is not responding. Please check:
-              </p>
-              <ul className="text-sm text-zinc-500 text-left max-w-md mx-auto space-y-1">
-                <li>• Camera is powered on and connected to the network</li>
-                <li>• Camera IP is set to 192.168.144.25</li>
-                <li>• Companion computer camera service is running</li>
-                <li>• go2rtc is running and connected to RTSP stream</li>
-                <li>• Tailscale funnel is active and accessible</li>
-                <li>• WebRTC stream is registered with Caribou Hub</li>
-              </ul>
-            </Card>
-          )}
-
-          {!selectedDrone && !dronesLoading && (
-            <Card className="bg-zinc-800/50 border-zinc-700 p-6 text-center">
-              <VideoOff className="mx-auto mb-4 text-zinc-500" size={48} />
-              <h3 className="text-lg font-medium text-white mb-2">No Drone Selected</h3>
-              <p className="text-sm text-zinc-400">
-                Please register a drone in the Drone Configuration page and select it above to view the camera feed.
-              </p>
-            </Card>
+          ) : (
+            <Input
+              value={manualUrl}
+              onChange={(e) => setManualUrl(e.target.value)}
+              placeholder="https://…/api/whep"
+              className="bg-zinc-700 border-zinc-600 text-white"
+            />
           )}
         </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} className="text-zinc-400">
+            Cancel
+          </Button>
+          <Button onClick={handleAdd} disabled={!canAdd}>
+            Add
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── CameraFeedApp (root) ──────────────────────────────────────────────────
+
+export default function CameraFeedApp() {
+  const { streams, updateStreams } = useStreamConfigStorage();
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  // Fetch drones via shared hook
+  const { selectedDrone, drones: rawDrones } = useDroneSelection("camera");
+  const droneList = useMemo(
+    () => (rawDrones || []).map((d: any) => ({ id: d.id, droneId: d.droneId, name: d.name })),
+    [rawDrones]
+  );
+
+  // subscribe_camera: used by drone-type streams to subscribe to camera feeds
+  // Each StreamWidget handles its own WebRTC connection using droneId: selectedDrone as fallback
+  const _cameraChannel = selectedDrone ? `subscribe_camera:${selectedDrone}` : null;
+
+  // Add stream
+  const handleAddStream = useCallback(
+    (config: StreamConfig) => {
+      updateStreams([...streams, config]);
+    },
+    [streams, updateStreams]
+  );
+
+  // Remove stream
+  const handleRemoveStream = useCallback(
+    (id: string) => {
+      updateStreams(streams.filter((s) => s.id !== id));
+    },
+    [streams, updateStreams]
+  );
+
+  // Update stream config
+  const handleUpdateStream = useCallback(
+    (updated: StreamConfig) => {
+      updateStreams(streams.map((s) => (s.id === updated.id ? updated : s)));
+    },
+    [streams, updateStreams]
+  );
+
+  // Drag-and-drop reorder
+  const handleDrop = useCallback(
+    (dropIdx: number) => {
+      if (draggedIdx === null || draggedIdx === dropIdx) return;
+      const next = [...streams];
+      const [moved] = next.splice(draggedIdx, 1);
+      next.splice(dropIdx, 0, moved);
+      updateStreams(next);
+      setDraggedIdx(null);
+      setDragOverIdx(null);
+    },
+    [draggedIdx, streams, updateStreams]
+  );
+
+  return (
+    <div className="h-full flex flex-col bg-zinc-900">
+      {/* Header */}
+      <div className="border-b border-zinc-800 px-4 py-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Radio size={16} className="text-zinc-500" />
+          <span className="text-sm font-medium text-white">Camera Feeds</span>
+          {streams.length > 0 && (
+            <span className="text-xs bg-zinc-700 text-zinc-300 px-1.5 py-0.5 rounded">
+              {streams.length}
+            </span>
+          )}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="border-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-800 text-xs"
+          onClick={() => setShowAddDialog(true)}
+        >
+          <Plus size={14} className="mr-1" />
+          Add stream
+        </Button>
       </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-auto p-4">
+        {streams.length === 0 ? (
+          /* Empty state */
+          <div className="h-full flex flex-col items-center justify-center text-center">
+            <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center mb-4">
+              <Radio size={28} className="text-zinc-500" />
+            </div>
+            <h3 className="text-lg font-medium text-white mb-1">No streams</h3>
+            <p className="text-sm text-zinc-500 mb-4">
+              Add a camera stream to start viewing
+            </p>
+            <Button
+              variant="outline"
+              className="border-zinc-700 text-zinc-300 hover:text-white"
+              onClick={() => setShowAddDialog(true)}
+            >
+              <Plus size={16} className="mr-2" />
+              Add stream
+            </Button>
+          </div>
+        ) : (
+          /* Stream grid */
+          <div className={`grid ${gridCols(streams.length)} gap-4`}>
+            {streams.map((stream, idx) => (
+              <StreamWidget
+                key={stream.id}
+                config={stream}
+                drones={droneList}
+                onRemove={() => handleRemoveStream(stream.id)}
+                onUpdate={handleUpdateStream}
+                draggable
+                onDragStart={() => setDraggedIdx(idx)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOverIdx(idx);
+                }}
+                onDrop={() => handleDrop(idx)}
+                isDragOver={dragOverIdx === idx && draggedIdx !== idx}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Add Stream Dialog */}
+      <AddStreamDialog
+        open={showAddDialog}
+        onOpenChange={setShowAddDialog}
+        drones={droneList}
+        onAdd={handleAddStream}
+      />
     </div>
   );
 }

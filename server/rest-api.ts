@@ -833,6 +833,76 @@ router.post("/camera/whep-proxy/:droneId", async (req: Request, res: Response) =
   }
 });
 
+/**
+ * POST /api/rest/camera/whep-proxy-url
+ * Same WHEP relay logic for manually-entered WHEP URLs.
+ * Query param: ?target=<encoded WHEP URL> (must be http: or https:)
+ */
+router.post("/camera/whep-proxy-url", async (req: Request, res: Response) => {
+  try {
+    const target = req.query.target as string;
+    if (!target) {
+      return res.status(400).json({ success: false, error: "Missing ?target= query param" });
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(target);
+    } catch {
+      return res.status(400).json({ success: false, error: "Invalid target URL" });
+    }
+
+    if (!parsed.protocol.startsWith("http")) {
+      return res.status(400).json({ success: false, error: "Target must be http: or https:" });
+    }
+
+    // Read SDP offer
+    let sdpOffer: string;
+    if (typeof req.body === "string") {
+      sdpOffer = req.body;
+    } else if (Buffer.isBuffer(req.body)) {
+      sdpOffer = req.body.toString("utf-8");
+    } else {
+      sdpOffer = JSON.stringify(req.body);
+    }
+
+    if (!sdpOffer || sdpOffer.length < 10) {
+      return res.status(400).json({ success: false, error: "Missing or invalid SDP offer" });
+    }
+
+    console.log(`[WHEP Proxy URL] Relaying SDP to ${target} (${sdpOffer.length} bytes)`);
+
+    const upstreamResponse = await fetch(target, {
+      method: "POST",
+      headers: { "Content-Type": "application/sdp" },
+      body: sdpOffer,
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!upstreamResponse.ok) {
+      const errorText = await upstreamResponse.text().catch(() => "(no body)");
+      return res.status(502).json({
+        success: false,
+        error: `Upstream returned ${upstreamResponse.status}`,
+        detail: errorText.slice(0, 500),
+      });
+    }
+
+    const sdpAnswer = await upstreamResponse.text();
+    res.setHeader("Content-Type", "application/sdp");
+    return res.status(200).send(sdpAnswer);
+  } catch (error: any) {
+    if (error?.name === "TimeoutError" || error?.code === "UND_ERR_CONNECT_TIMEOUT") {
+      return res.status(504).json({ success: false, error: "Timeout reaching target WHEP endpoint" });
+    }
+    return res.status(502).json({
+      success: false,
+      error: "Failed to reach target WHEP endpoint",
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
 // ─── FC Log Management ─────────────────────────────────────────────────────
 
 /**

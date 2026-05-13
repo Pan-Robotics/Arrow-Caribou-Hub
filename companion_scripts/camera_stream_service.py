@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-SIYI A8 Mini WebRTC Video Streaming Service (go2rtc + Tailscale)
-
-This script manages go2rtc for low-latency WebRTC streaming from the
-SIYI A8 mini camera. It replaces the previous HLS-based pipeline.
+Caribou Camera Stream Service
+------------------------------
+Manages go2rtc for a single RTSP camera source, exposes it via Tailscale Funnel,
+and registers the WHEP URL with the Caribou Hub for browser-based WebRTC playback.
 
 Architecture:
-  SIYI Camera (RTSP) → go2rtc (WebRTC) → Tailscale Funnel → Browser
+  RTSP Camera → go2rtc (local) → Tailscale Funnel (public HTTPS) → Hub WHEP proxy → Browser
 
 go2rtc handles:
-  - RTSP ingest from the camera
+  - RTSP ingest from any camera
   - WebRTC encoding and signaling (WHEP API)
   - ICE/STUN negotiation for peer-to-peer media
 
@@ -18,718 +18,525 @@ Tailscale Funnel handles:
   - WebRTC media flows peer-to-peer via UDP, not through the funnel
 
 Features:
-  - Manages go2rtc process lifecycle
+  - Generic: works with ANY RTSP camera source (no camera-specific code)
+  - Manages go2rtc process lifecycle with auto-restart
   - Auto-detects Tailscale funnel URL
-  - Registers WebRTC URL with Caribou Hub
-  - Health monitoring and auto-restart
-  - Combined mode with SIYI gimbal controller
-
-RTSP Sources:
-  - Main stream (4K): rtsp://192.168.144.25:8554/main.264
-  - Sub stream (720p): rtsp://192.168.144.25:8554/sub.264
+  - Registers WHEP URL with Caribou Hub
+  - Health monitoring with stream producer validation
+  - 5-minute heartbeat for Hub re-registration
 
 Usage:
-    python camera_stream_service.py --stream sub --hub-url https://your-hub.com --drone-id caribou_001 --api-key YOUR_KEY
+  python3 camera_stream_service.py \\
+    --rtsp-url rtsp://192.168.1.100:8554/stream \\
+    --hub-url https://arrowhub-5j6w8bkt.manus.space \\
+    --drone-id caribou_001 \\
+    --api-key <your-api-key>
+
+See companion_scripts/install_camera_services.sh for automated deployment.
 """
 
+import argparse
 import asyncio
-import subprocess
+import json
+import logging
 import os
 import signal
+import subprocess
 import sys
+import textwrap
 import time
-import json
-import argparse
-import logging
-import tempfile
 from pathlib import Path
 from typing import Optional
 
 try:
     import requests
 except ImportError:
-    requests = None
+    print("ERROR: 'requests' package required. Install with: pip3 install requests")
+    sys.exit(1)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('camera_stream')
+# ─── Module-level constants ────────────────────────────────────────────────────
 
-# ============================================================================
-# Configuration
-# ============================================================================
-
-SIYI_CAMERA_IP = "192.168.144.25"
-RTSP_PORT = 8554
-
-RTSP_STREAMS = {
-    "main": f"rtsp://{SIYI_CAMERA_IP}:{RTSP_PORT}/main.264",   # 4K
-    "sub": f"rtsp://{SIYI_CAMERA_IP}:{RTSP_PORT}/sub.264",     # 720p (lower bandwidth)
-}
-
-# go2rtc defaults
 GO2RTC_API_PORT = 1984
 GO2RTC_WEBRTC_PORT = 8555
-GO2RTC_BINARY = "go2rtc"  # Expected in PATH or /usr/local/bin/go2rtc
-
-# Tailscale funnel port (must be 443, 8443, or 10000)
+GO2RTC_BINARY = "go2rtc"  # must be in PATH or /usr/local/bin/
 TAILSCALE_FUNNEL_PORT = 443
 
+GO2RTC_CONFIG_DIR = Path("/tmp/go2rtc")
+GO2RTC_CONFIG_PATH = GO2RTC_CONFIG_DIR / "go2rtc.yaml"
 
-# ============================================================================
-# go2rtc Configuration Generator
-# ============================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("caribou-camera-stream")
 
-def generate_go2rtc_config(rtsp_url: str, api_port: int = GO2RTC_API_PORT,
-                           webrtc_port: int = GO2RTC_WEBRTC_PORT) -> str:
+
+# ─── Config generation ─────────────────────────────────────────────────────────
+
+def generate_go2rtc_config(rtsp_url: str, api_port: int, webrtc_port: int) -> str:
+    """Produce go2rtc YAML config for a single RTSP stream named 'camera'."""
+    return textwrap.dedent(f"""\
+        streams:
+          camera: {rtsp_url}
+
+        api:
+          listen: ":{api_port}"
+
+        webrtc:
+          listen: ":{webrtc_port}"
+          candidates:
+            - stun:{webrtc_port}
+
+        rtsp:
+          listen: ""
+
+        log:
+          level: info
+    """)
+
+
+# ─── Tailscale helpers ─────────────────────────────────────────────────────────
+
+def get_tailscale_funnel_url(
+    funnel_port: int = 443,
+    max_retries: int = 15,
+    retry_interval: float = 2.0,
+) -> Optional[str]:
     """
-    Generate go2rtc YAML configuration.
-    
-    Uses STUN for automatic public IP detection so WebRTC media
-    can flow peer-to-peer even when the Pi is behind NAT.
-    """
-    lines = []
-    
-    # streams section
-    lines.append("streams:")
-    lines.append(f"  camera: {rtsp_url}")
-    lines.append("")
-    
-    # api section
-    lines.append("api:")
-    lines.append(f'  listen: ":{api_port}"')
-    lines.append("")
-    
-    # webrtc section
-    lines.append("webrtc:")
-    lines.append(f'  listen: ":{webrtc_port}"')
-    lines.append("  candidates:")
-    lines.append(f"    - stun:{webrtc_port}")
-    lines.append("")
-    
-    # rtsp section - disable re-streaming
-    lines.append("rtsp:")
-    lines.append('  listen: ""')
-    lines.append("")
-    
-    # log section
-    lines.append("log:")
-    lines.append("  level: info")
-    
-    return "\n".join(lines)
-
-
-# ============================================================================
-# Tailscale Funnel URL Detection
-# ============================================================================
-
-def get_tailscale_funnel_url(funnel_port: int = TAILSCALE_FUNNEL_PORT,
-                              max_retries: int = 30,
-                              retry_interval: float = 2.0) -> Optional[str]:
-    """
-    Auto-detect the Tailscale funnel URL by querying tailscale status.
-    
-    Returns the public HTTPS URL (e.g. https://caribou.tail1234.ts.net)
-    or None if Tailscale is not running or funnel is not configured.
-    
-    Retries because Tailscale may still be connecting on boot.
+    Detect the Tailscale MagicDNS hostname and build the public HTTPS URL.
+    Returns None if Tailscale is not installed or not connected.
     """
     for attempt in range(max_retries):
         try:
             result = subprocess.run(
                 ["tailscale", "status", "--json"],
-                capture_output=True, text=True, timeout=10
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
-            
             if result.returncode != 0:
-                if attempt < max_retries - 1:
-                    logger.debug(f"Tailscale not ready (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(retry_interval)
-                    continue
-                logger.warning(f"tailscale status failed: {result.stderr}")
-                return None
-            
-            status = json.loads(result.stdout)
-            
-            # Get the DNS name of this machine
-            self_status = status.get("Self", {})
-            dns_name = self_status.get("DNSName", "")
-            
+                logger.warning(
+                    f"tailscale status failed (attempt {attempt + 1}/{max_retries}): "
+                    f"{result.stderr.strip()}"
+                )
+                time.sleep(retry_interval)
+                continue
+
+            data = json.loads(result.stdout)
+            dns_name = data.get("Self", {}).get("DNSName", "")
             if not dns_name:
-                if attempt < max_retries - 1:
-                    logger.debug(f"No DNS name yet (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(retry_interval)
-                    continue
-                logger.warning("Tailscale has no DNS name assigned")
-                return None
-            
-            # Remove trailing dot from DNS name
+                logger.warning(f"No DNSName in tailscale status (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_interval)
+                continue
+
+            # Strip trailing dot
             dns_name = dns_name.rstrip(".")
-            
-            # Construct the funnel URL
+
             if funnel_port == 443:
-                funnel_url = f"https://{dns_name}"
+                url = f"https://{dns_name}"
             else:
-                funnel_url = f"https://{dns_name}:{funnel_port}"
-            
-            logger.info(f"Tailscale funnel URL detected: {funnel_url}")
-            return funnel_url
-            
-        except subprocess.TimeoutExpired:
-            logger.debug(f"tailscale status timed out (attempt {attempt + 1}/{max_retries})")
-            if attempt < max_retries - 1:
-                time.sleep(retry_interval)
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse tailscale status JSON: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(retry_interval)
+                url = f"https://{dns_name}:{funnel_port}"
+
+            logger.info(f"Tailscale funnel URL detected: {url}")
+            return url
+
         except FileNotFoundError:
-            logger.error("tailscale CLI not found. Is Tailscale installed?")
+            logger.warning("Tailscale not installed — cannot detect funnel URL")
             return None
-        except Exception as e:
-            logger.error(f"Unexpected error querying Tailscale: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(retry_interval)
-    
-    logger.error(f"Failed to detect Tailscale funnel URL after {max_retries} attempts")
+        except (json.JSONDecodeError, subprocess.TimeoutExpired) as e:
+            logger.warning(f"Tailscale detection error (attempt {attempt + 1}/{max_retries}): {e}")
+            time.sleep(retry_interval)
+            continue
+
+    logger.error(f"Failed to detect Tailscale URL after {max_retries} attempts")
     return None
 
 
-def setup_tailscale_funnel(local_port: int = GO2RTC_API_PORT,
-                            funnel_port: int = TAILSCALE_FUNNEL_PORT) -> bool:
+def setup_tailscale_funnel(local_port: int = 1984, funnel_port: int = 443) -> bool:
     """
-    Configure Tailscale serve + funnel to expose go2rtc API.
-    
-    This runs:
-      tailscale serve --bg --https=<funnel_port> http://localhost:<local_port>
-      tailscale funnel <funnel_port> on
-    
-    Returns True if successful.
+    Configure Tailscale to serve and funnel go2rtc's API port.
+    Returns True on success. Failure is non-fatal (stream still works on LAN).
     """
     try:
-        # Step 1: Set up tailscale serve (proxy HTTPS to local HTTP)
+        # Step 1: tailscale serve
         serve_cmd = [
             "tailscale", "serve", "--bg",
             f"--https={funnel_port}",
-            f"http://localhost:{local_port}"
+            f"http://localhost:{local_port}",
         ]
         logger.info(f"Setting up Tailscale serve: {' '.join(serve_cmd)}")
-        result = subprocess.run(serve_cmd, capture_output=True, text=True, timeout=15)
-        
-        if result.returncode != 0:
-            logger.error(f"tailscale serve failed: {result.stderr}")
+        serve_result = subprocess.run(serve_cmd, capture_output=True, text=True, timeout=30)
+
+        if serve_result.returncode != 0:
+            logger.warning(f"tailscale serve failed: {serve_result.stderr.strip()}")
             return False
-        
-        logger.info("Tailscale serve configured")
-        
-        # Step 2: Enable funnel (make it public)
+
+        # Step 2: tailscale funnel
         funnel_cmd = ["tailscale", "funnel", str(funnel_port), "on"]
         logger.info(f"Enabling Tailscale funnel: {' '.join(funnel_cmd)}")
-        result = subprocess.run(funnel_cmd, capture_output=True, text=True, timeout=15)
-        
-        if result.returncode != 0:
-            logger.error(f"tailscale funnel failed: {result.stderr}")
+        funnel_result = subprocess.run(funnel_cmd, capture_output=True, text=True, timeout=30)
+
+        if funnel_result.returncode != 0:
+            logger.warning(f"tailscale funnel failed: {funnel_result.stderr.strip()}")
             return False
-        
-        logger.info(f"Tailscale funnel enabled on port {funnel_port}")
+
+        logger.info(f"Tailscale funnel configured: port {funnel_port} → localhost:{local_port}")
         return True
-        
-    except subprocess.TimeoutExpired:
-        logger.error("Tailscale command timed out")
-        return False
+
     except FileNotFoundError:
-        logger.error("tailscale CLI not found")
+        logger.warning("Tailscale not installed — skipping funnel setup")
         return False
-    except Exception as e:
-        logger.error(f"Failed to setup Tailscale funnel: {e}")
+    except subprocess.TimeoutExpired:
+        logger.warning("Tailscale command timed out")
         return False
 
 
-# ============================================================================
-# WebRTC Streaming Service (go2rtc)
-# ============================================================================
+# ─── WebRTC Streaming Service ──────────────────────────────────────────────────
 
 class WebRTCStreamingService:
     """
-    Service that manages go2rtc for RTSP-to-WebRTC streaming.
-    
-    Replaces the previous HLS pipeline with:
-    1. go2rtc binary for RTSP ingest and WebRTC serving
-    2. Tailscale funnel for public access to signaling API
-    3. Hub registration so the browser knows the WebRTC URL
+    Main service class. Manages go2rtc lifecycle, health monitoring,
+    Tailscale URL detection, and Hub registration with heartbeat.
     """
-    
-    def __init__(self,
-                 stream_type: str = "sub",
-                 rtsp_url: Optional[str] = None,
-                 api_port: int = GO2RTC_API_PORT,
-                 webrtc_port: int = GO2RTC_WEBRTC_PORT,
-                 funnel_port: int = TAILSCALE_FUNNEL_PORT,
-                 hub_url: Optional[str] = None,
-                 drone_id: Optional[str] = None,
-                 api_key: Optional[str] = None,
-                 public_url: Optional[str] = None,
-                 skip_funnel_setup: bool = False):
-        
-        self.stream_type = stream_type
-        self.rtsp_url = rtsp_url or RTSP_STREAMS.get(stream_type, RTSP_STREAMS["sub"])
+
+    def __init__(
+        self,
+        rtsp_url: str,
+        api_port: int = GO2RTC_API_PORT,
+        webrtc_port: int = GO2RTC_WEBRTC_PORT,
+        funnel_port: int = TAILSCALE_FUNNEL_PORT,
+        hub_url: Optional[str] = None,
+        drone_id: Optional[str] = None,
+        api_key: Optional[str] = None,
+        public_url: Optional[str] = None,
+        skip_funnel_setup: bool = False,
+    ):
+        self.rtsp_url = rtsp_url
         self.api_port = api_port
         self.webrtc_port = webrtc_port
         self.funnel_port = funnel_port
-        
-        # Caribou Hub registration
         self.hub_url = hub_url
         self.drone_id = drone_id
         self.api_key = api_key
-        self.public_url = public_url  # Override: skip Tailscale detection
+        self.public_url = public_url
         self.skip_funnel_setup = skip_funnel_setup
+
+        # Instance state
         self._stream_registered = False
-        self._last_registration_attempt = 0.0  # epoch timestamp
-        self._registration_retry_interval = 30.0  # seconds between retries
-        self._registration_heartbeat_interval = 300.0  # re-register every 5 min as heartbeat
-        self._last_heartbeat = 0.0  # epoch timestamp of last successful heartbeat
-        self._detected_webrtc_url: Optional[str] = None  # cached URL for retries
-        
-        # go2rtc process
+        self._last_registration_attempt = 0.0
+        self._registration_retry_interval = 30.0       # seconds between failed registration retries
+        self._registration_heartbeat_interval = 300.0  # force re-register every 5 min
+        self._last_heartbeat = 0.0
+        self._detected_webrtc_url: Optional[str] = None  # cached after first detection
+
         self.go2rtc_process: Optional[subprocess.Popen] = None
-        self.config_path: Optional[str] = None
-        
         self.running = False
         self.stream_healthy = False
         self.reconnect_count = 0
         self.max_reconnects = 10
-    
-    def _write_go2rtc_config(self) -> str:
-        """Write go2rtc config to a temp file and return the path."""
-        config_content = generate_go2rtc_config(
-            rtsp_url=self.rtsp_url,
-            api_port=self.api_port,
-            webrtc_port=self.webrtc_port
-        )
-        
-        config_dir = Path("/tmp/go2rtc")
-        config_dir.mkdir(parents=True, exist_ok=True)
-        config_path = config_dir / "go2rtc.yaml"
-        
-        config_path.write_text(config_content)
-        logger.info(f"go2rtc config written to {config_path}")
-        logger.debug(f"Config:\n{config_content}")
-        
-        return str(config_path)
-    
+
     def _start_go2rtc(self) -> bool:
-        """Start the go2rtc process."""
+        """Write config and start go2rtc subprocess."""
+        GO2RTC_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        config = generate_go2rtc_config(self.rtsp_url, self.api_port, self.webrtc_port)
+        GO2RTC_CONFIG_PATH.write_text(config)
+        logger.info(f"go2rtc config written to {GO2RTC_CONFIG_PATH}")
+
         try:
-            self.config_path = self._write_go2rtc_config()
-            
-            cmd = [GO2RTC_BINARY, "-config", self.config_path]
-            logger.info(f"Starting go2rtc: {' '.join(cmd)}")
-            
             self.go2rtc_process = subprocess.Popen(
-                cmd,
+                [GO2RTC_BINARY, "-config", str(GO2RTC_CONFIG_PATH)],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                preexec_fn=os.setsid
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid,
             )
-            
-            # Give go2rtc a moment to start and connect to RTSP
+            # Give go2rtc time to start and connect to RTSP source
             time.sleep(3)
-            
-            if self.go2rtc_process.poll() is None:
-                logger.info(f"go2rtc started (PID {self.go2rtc_process.pid})")
-                return True
-            else:
-                output = self.go2rtc_process.stdout.read().decode() if self.go2rtc_process.stdout else ""
-                logger.error(f"go2rtc failed to start: {output}")
+            if self.go2rtc_process.poll() is not None:
+                logger.error("go2rtc exited immediately after start")
                 return False
-                
+            logger.info(f"go2rtc started (PID {self.go2rtc_process.pid})")
+            return True
         except FileNotFoundError:
-            logger.error(f"go2rtc binary not found at '{GO2RTC_BINARY}'. "
-                        "Install with: install_camera_services.sh")
+            logger.error(f"go2rtc binary not found. Ensure '{GO2RTC_BINARY}' is in PATH or /usr/local/bin/")
             return False
         except Exception as e:
             logger.error(f"Failed to start go2rtc: {e}")
             return False
-    
+
     def _stop_go2rtc(self):
-        """Stop the go2rtc process."""
-        if self.go2rtc_process:
+        """Stop go2rtc gracefully (SIGTERM → wait 5s → SIGKILL)."""
+        if self.go2rtc_process and self.go2rtc_process.poll() is None:
             try:
                 os.killpg(os.getpgid(self.go2rtc_process.pid), signal.SIGTERM)
                 self.go2rtc_process.wait(timeout=5)
-            except Exception:
-                try:
-                    os.killpg(os.getpgid(self.go2rtc_process.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-            self.go2rtc_process = None
-            logger.info("go2rtc stopped")
-    
+                logger.info("go2rtc stopped gracefully")
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(self.go2rtc_process.pid), signal.SIGKILL)
+                logger.warning("go2rtc killed (SIGKILL after 5s timeout)")
+            except ProcessLookupError:
+                pass
+        self.go2rtc_process = None
+
     def _check_stream_health(self) -> bool:
-        """Check if go2rtc is healthy by querying its API."""
-        if self.go2rtc_process is None or self.go2rtc_process.poll() is not None:
-            return False
-        
-        if requests is None:
-            # If requests not available, just check process is alive
-            return True
-        
+        """
+        Check if go2rtc has an active producer for the 'camera' stream.
+        Returns True iff response["camera"]["producers"] is non-empty.
+        """
         try:
             resp = requests.get(
                 f"http://localhost:{self.api_port}/api/streams",
-                timeout=3
+                timeout=5,
             )
-            if resp.status_code == 200:
-                streams = resp.json()
-                # Check if our camera stream exists and has producers
-                camera = streams.get("camera", {})
-                producers = camera.get("producers", [])
-                return len(producers) > 0
-            return False
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            camera = data.get("camera", {})
+            producers = camera.get("producers", [])
+            return len(producers) > 0
         except Exception:
+            # Fallback: check if process is alive
+            if self.go2rtc_process and self.go2rtc_process.poll() is None:
+                return True
             return False
-    
+
     def _detect_webrtc_url(self) -> Optional[str]:
         """
-        Detect the public WebRTC signaling URL.
-        
-        Priority:
-        1. Explicit --public-url flag
-        2. Auto-detect Tailscale funnel URL
-        3. Fall back to local URL (LAN only)
+        Detect the public WHEP URL.
+        Priority: explicit --public-url > Tailscale auto-detect > localhost fallback.
         """
         if self.public_url:
-            url = f"{self.public_url.rstrip('/')}/api/webrtc?src=camera"
+            url = self.public_url.rstrip("/")
+            if "/api/webrtc" not in url:
+                url = f"{url}/api/webrtc?src=camera"
             logger.info(f"Using explicit public URL: {url}")
             return url
-        
-        # Try Tailscale auto-detection
-        funnel_url = get_tailscale_funnel_url(
-            funnel_port=self.funnel_port,
-            max_retries=15,
-            retry_interval=2.0
-        )
-        
-        if funnel_url:
-            url = f"{funnel_url}/api/webrtc?src=camera"
+
+        base = get_tailscale_funnel_url(self.funnel_port)
+        if base:
+            url = f"{base}/api/webrtc?src=camera"
             logger.info(f"Using Tailscale funnel URL: {url}")
             return url
-        
-        # Fallback to local (won't work remotely)
-        logger.warning("No public URL available. Stream will only be accessible on LAN.")
-        url = f"http://localhost:{self.api_port}/api/webrtc?src=camera"
-        return url
-    
-    def _register_stream_with_hub(self, webrtc_url: str):
-        """Register the WebRTC stream URL with Caribou Hub.
-        
-        Called periodically by the run() loop when the stream is healthy
-        but not yet registered. Sets _stream_registered = True on success.
-        """
+
+        # Fallback: LAN-only
+        logger.warning("No public URL available — using localhost (LAN only)")
+        return f"http://localhost:{self.api_port}/api/webrtc?src=camera"
+
+    def _register_stream_with_hub(self, webrtc_url: str) -> bool:
+        """Register the WHEP URL with the Caribou Hub."""
         if not self.hub_url or not self.drone_id or not self.api_key:
-            logger.debug("Hub registration skipped: missing hub_url, drone_id, or api_key")
-            return
-        
-        if requests is None:
-            logger.warning("'requests' package not installed. Cannot register stream with Hub.")
-            return
-        
+            logger.debug("Hub registration skipped — missing hub_url, drone_id, or api_key")
+            return False
+
+        self._last_registration_attempt = time.time()
+
         try:
-            rest_base = self.hub_url.replace("wss://", "https://").replace("ws://", "http://")
-            rest_base = rest_base.rstrip("/ws").rstrip("/")
-            register_url = f"{rest_base}/api/rest/camera/stream-register"
-            
+            register_url = f"{self.hub_url.rstrip('/')}/api/rest/camera/stream-register"
             logger.info(f"Registering stream with Hub: POST {register_url}")
-            
-            response = requests.post(register_url, json={
-                "api_key": self.api_key,
-                "drone_id": self.drone_id,
-                "webrtc_url": webrtc_url,
-            }, timeout=10)
-            
-            # Check content-type to avoid parsing HTML as JSON
-            content_type = response.headers.get("content-type", "")
-            
-            if response.status_code == 200 and "application/json" in content_type:
-                try:
-                    data = response.json()
-                    if data.get("success"):
-                        logger.info(f"Stream registered with Hub. WebRTC URL: {webrtc_url}")
-                        self._stream_registered = True
-                        self._last_heartbeat = time.time()
-                    else:
-                        logger.warning(f"Hub returned success=false: {data.get('error', 'unknown')}")
-                except ValueError:
-                    logger.warning(f"Hub returned 200 but invalid JSON. Content-Type: {content_type}")
+
+            resp = requests.post(
+                register_url,
+                json={
+                    "api_key": self.api_key,
+                    "drone_id": self.drone_id,
+                    "webrtc_url": webrtc_url,
+                },
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                self._stream_registered = True
+                self._last_heartbeat = time.time()
+                logger.info(f"Registered with Hub: {webrtc_url}")
+                return True
             else:
-                # Log truncated response body for debugging (avoid flooding logs with HTML)
-                body_preview = response.text[:200].replace('\n', ' ').strip()
-                logger.warning(
-                    f"Stream registration failed (HTTP {response.status_code}, "
-                    f"Content-Type: {content_type}): {body_preview}..."
-                )
-                
-        except requests.exceptions.ConnectionError as e:
-            logger.warning(f"Hub unreachable for stream registration (will retry): {e}")
-        except requests.exceptions.Timeout:
-            logger.warning("Stream registration timed out (will retry)")
+                logger.warning(f"Hub registration failed ({resp.status_code}): {resp.text}")
+                return False
         except Exception as e:
-            logger.error(f"Failed to register stream with Hub: {e}")
-    
+            logger.warning(f"Hub registration error: {e}")
+            return False
+
     def _unregister_stream_from_hub(self):
-        """Unregister the stream from Caribou Hub on shutdown."""
-        if not self._stream_registered or not self.hub_url or not self.drone_id or not self.api_key:
+        """Unregister from Hub on shutdown."""
+        if not self.hub_url or not self.drone_id or not self.api_key:
             return
-        
-        if requests is None:
+        if not self._stream_registered:
             return
-        
+
         try:
-            rest_base = self.hub_url.replace("wss://", "https://").replace("ws://", "http://")
-            rest_base = rest_base.rstrip("/ws").rstrip("/")
-            unregister_url = f"{rest_base}/api/rest/camera/stream-unregister"
-            
-            requests.post(unregister_url, json={
-                "api_key": self.api_key,
-                "drone_id": self.drone_id,
-            }, timeout=5)
-            
-            logger.info("Stream unregistered from Hub")
-            self._stream_registered = False
-            
+            unregister_url = f"{self.hub_url.rstrip('/')}/api/rest/camera/stream-unregister"
+            requests.post(
+                unregister_url,
+                json={
+                    "api_key": self.api_key,
+                    "drone_id": self.drone_id,
+                },
+                timeout=5,
+            )
+            logger.info("Unregistered from Hub")
         except Exception as e:
-            logger.warning(f"Failed to unregister stream from Hub: {e}")
-    
+            logger.warning(f"Hub unregistration error: {e}")
+
     async def run(self):
-        """Main service loop."""
+        """Main service loop — 2-second cadence."""
         self.running = True
-        
-        # Setup Tailscale funnel if not skipped and no explicit public URL
-        if not self.skip_funnel_setup and not self.public_url:
-            logger.info("Setting up Tailscale funnel...")
-            if not setup_tailscale_funnel(self.api_port, self.funnel_port):
-                logger.warning("Tailscale funnel setup failed. "
-                             "Stream may only be accessible on LAN.")
-        
+        logger.info(f"Starting Caribou camera stream service")
+        logger.info(f"  RTSP URL: {self.rtsp_url}")
+        logger.info(f"  go2rtc API port: {self.api_port}, WebRTC port: {self.webrtc_port}")
+        if self.hub_url:
+            logger.info(f"  Hub URL: {self.hub_url}")
+            logger.info(f"  Drone ID: {self.drone_id}")
+
+        # Set up Tailscale funnel if not skipped
+        if not self.skip_funnel_setup:
+            setup_tailscale_funnel(self.api_port, self.funnel_port)
+
         while self.running:
-            try:
-                # Start go2rtc if not running
-                if self.go2rtc_process is None or self.go2rtc_process.poll() is not None:
-                    if self.reconnect_count >= self.max_reconnects:
-                        logger.error("Max reconnection attempts reached. Waiting 30s...")
-                        await asyncio.sleep(30)
-                        self.reconnect_count = 0
-                        continue
-                    
-                    logger.info(f"Starting go2rtc with RTSP source: {self.rtsp_url}")
-                    
-                    if self._start_go2rtc():
-                        self.reconnect_count = 0
-                    else:
-                        self.reconnect_count += 1
-                        logger.warning(f"Reconnect attempt {self.reconnect_count}/{self.max_reconnects}")
-                        await asyncio.sleep(5)
-                        continue
-                
-                # Monitor stream health
-                was_healthy = self.stream_healthy
-                self.stream_healthy = self._check_stream_health()
-                
-                if not self.stream_healthy and was_healthy:
-                    logger.warning("Stream became unhealthy, restarting go2rtc...")
-                    self._stream_registered = False
-                    self._detected_webrtc_url = None
-                    self._stop_go2rtc()
-                    self.reconnect_count += 1
-                    await asyncio.sleep(2)
+            # Check if go2rtc is running
+            if self.go2rtc_process is None or self.go2rtc_process.poll() is not None:
+                if self.reconnect_count >= self.max_reconnects:
+                    logger.error(
+                        f"Max reconnects ({self.max_reconnects}) reached. "
+                        f"Cooling down 30s before reset..."
+                    )
+                    await asyncio.sleep(30)
+                    self.reconnect_count = 0
                     continue
-                
-                # Register with Hub when stream is healthy
-                if self.stream_healthy:
-                    # Detect URL on first healthy transition
-                    if not was_healthy or self._detected_webrtc_url is None:
-                        self._detected_webrtc_url = self._detect_webrtc_url()
-                    
-                    # Register (or retry registration) if not yet registered
-                    if self._detected_webrtc_url and not self._stream_registered:
-                        now = time.time()
-                        if now - self._last_registration_attempt >= self._registration_retry_interval:
-                            self._last_registration_attempt = now
-                            self._register_stream_with_hub(self._detected_webrtc_url)
-                    
-                    # Periodic heartbeat re-registration (handles server restarts
-                    # that wipe the in-memory registry)
-                    elif self._detected_webrtc_url and self._stream_registered:
-                        now = time.time()
-                        if now - self._last_heartbeat >= self._registration_heartbeat_interval:
-                            logger.debug("Sending heartbeat re-registration to Hub")
-                            self._stream_registered = False  # force re-register
-                            self._last_registration_attempt = 0.0  # allow immediate attempt
-                
+
+                logger.info(f"Starting go2rtc (attempt {self.reconnect_count + 1})...")
+                if not self._start_go2rtc():
+                    self.reconnect_count += 1
+                    await asyncio.sleep(5)
+                    continue
+
+            # Health check
+            was_healthy = self.stream_healthy
+            self.stream_healthy = self._check_stream_health()
+
+            # Became unhealthy — restart go2rtc
+            if was_healthy and not self.stream_healthy:
+                logger.warning("Stream became unhealthy — restarting go2rtc")
+                self._stream_registered = False
+                self._detected_webrtc_url = None
+                self._stop_go2rtc()
+                self.reconnect_count += 1
                 await asyncio.sleep(2)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in main loop: {e}")
-                await asyncio.sleep(5)
-        
-        # Cleanup
+                continue
+
+            # Healthy — handle URL detection and Hub registration
+            if self.stream_healthy:
+                # Detect URL if not cached
+                if not self._detected_webrtc_url:
+                    self._detected_webrtc_url = self._detect_webrtc_url()
+
+                now = time.time()
+
+                if self._detected_webrtc_url and not self._stream_registered:
+                    # Retry registration with backoff
+                    if (now - self._last_registration_attempt) >= self._registration_retry_interval:
+                        self._register_stream_with_hub(self._detected_webrtc_url)
+
+                elif self._stream_registered:
+                    # Heartbeat re-registration every 5 minutes
+                    if (now - self._last_heartbeat) >= self._registration_heartbeat_interval:
+                        logger.info("Heartbeat — forcing re-registration with Hub")
+                        self._stream_registered = False  # Will trigger re-registration next cycle
+
+                # Reset reconnect counter on sustained health
+                if self.reconnect_count > 0:
+                    self.reconnect_count = 0
+
+            await asyncio.sleep(2)
+
+        # Cleanup on exit
         self._unregister_stream_from_hub()
         self._stop_go2rtc()
-    
-    def stop(self):
-        """Stop the service."""
-        self.running = False
-    
-    def get_status(self) -> dict:
-        """Get current service status."""
-        return {
-            "running": self.running,
-            "stream_type": self.stream_type,
-            "rtsp_url": self.rtsp_url,
-            "api_port": self.api_port,
-            "webrtc_port": self.webrtc_port,
-            "stream_healthy": self.stream_healthy,
-            "go2rtc_running": self.go2rtc_process is not None and self.go2rtc_process.poll() is None,
-            "reconnect_count": self.reconnect_count,
-            "registered": self._stream_registered,
-            "webrtc_url": self._detected_webrtc_url,
-            "last_registration_attempt": self._last_registration_attempt,
-        }
+        logger.info("Caribou camera stream service stopped")
 
 
-# ============================================================================
-# Combined Camera Service (Controller + Streaming)
-# ============================================================================
+# ─── Signal handling ───────────────────────────────────────────────────────────
 
-class CombinedCameraService:
-    """
-    Combined service running both camera controller and video streaming.
-    
-    This is the recommended deployment: a single service that handles
-    both gimbal control commands and WebRTC video streaming.
-    """
-    
-    def __init__(self,
-                 hub_url: str,
-                 drone_id: str,
-                 api_key: str,
-                 stream_type: str = "sub",
-                 rtsp_url: Optional[str] = None,
-                 api_port: int = GO2RTC_API_PORT,
-                 webrtc_port: int = GO2RTC_WEBRTC_PORT,
-                 funnel_port: int = TAILSCALE_FUNNEL_PORT,
-                 public_url: Optional[str] = None,
-                 skip_funnel_setup: bool = False):
-        
-        # Import camera controller
-        from siyi_camera_controller import CameraWebSocketBridge
-        
-        self.controller = CameraWebSocketBridge(hub_url, drone_id, api_key)
-        self.streamer = WebRTCStreamingService(
-            stream_type=stream_type,
-            rtsp_url=rtsp_url,
-            api_port=api_port,
-            webrtc_port=webrtc_port,
-            funnel_port=funnel_port,
-            hub_url=hub_url,
-            drone_id=drone_id,
-            api_key=api_key,
-            public_url=public_url,
-            skip_funnel_setup=skip_funnel_setup,
-        )
-        
-    async def run(self):
-        """Run both services concurrently."""
-        await asyncio.gather(
-            self.controller.run(),
-            self.streamer.run()
-        )
-    
-    def stop(self):
-        """Stop both services."""
-        self.controller.stop()
-        self.streamer.stop()
+def setup_signal_handlers(service: WebRTCStreamingService):
+    """Handle SIGTERM/SIGINT for graceful shutdown."""
+    def handler(signum, frame):
+        sig_name = signal.Signals(signum).name
+        logger.info(f"Received {sig_name} — shutting down gracefully")
+        service.running = False
+
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
 
 
-# ============================================================================
-# Main Entry Point
-# ============================================================================
+# ─── CLI ───────────────────────────────────────────────────────────────────────
 
-async def main():
+def parse_args():
     parser = argparse.ArgumentParser(
-        description='SIYI Camera WebRTC Streaming Service (go2rtc + Tailscale)'
+        description="Caribou Camera Stream Service — manages go2rtc and Hub registration for any RTSP source",
     )
-    parser.add_argument('--stream', type=str, choices=['main', 'sub'], default='sub',
-                       help='Stream type: main (4K) or sub (720p)')
-    parser.add_argument('--rtsp-url', type=str, default=None,
-                       help='Override RTSP URL (e.g. rtsp://192.168.144.25:8554/sub.264)')
-    parser.add_argument('--api-port', type=int, default=GO2RTC_API_PORT,
-                       help=f'go2rtc API port (default: {GO2RTC_API_PORT})')
-    parser.add_argument('--webrtc-port', type=int, default=GO2RTC_WEBRTC_PORT,
-                       help=f'go2rtc WebRTC media port (default: {GO2RTC_WEBRTC_PORT})')
-    parser.add_argument('--funnel-port', type=int, default=TAILSCALE_FUNNEL_PORT,
-                       choices=[443, 8443, 10000],
-                       help=f'Tailscale funnel port (default: {TAILSCALE_FUNNEL_PORT})')
-    parser.add_argument('--combined', action='store_true',
-                       help='Run combined service (streaming + gimbal controller)')
-    parser.add_argument('--hub-url', type=str, default=None,
-                       help='Caribou Hub URL for stream registration')
-    parser.add_argument('--drone-id', type=str, default='caribou_001',
-                       help='Drone identifier')
-    parser.add_argument('--api-key', type=str, default='',
-                       help='API key for Caribou Hub authentication')
-    parser.add_argument('--public-url', type=str, default=None,
-                       help='Override public URL (skip Tailscale auto-detection)')
-    parser.add_argument('--skip-funnel-setup', action='store_true',
-                       help='Skip Tailscale funnel setup (if already configured)')
-    
-    args = parser.parse_args()
-    
-    if args.combined:
-        service = CombinedCameraService(
-            hub_url=args.hub_url or '',
-            drone_id=args.drone_id,
-            api_key=args.api_key,
-            stream_type=args.stream,
-            rtsp_url=args.rtsp_url,
-            api_port=args.api_port,
-            webrtc_port=args.webrtc_port,
-            funnel_port=args.funnel_port,
-            public_url=args.public_url,
-            skip_funnel_setup=args.skip_funnel_setup,
-        )
-    else:
-        service = WebRTCStreamingService(
-            stream_type=args.stream,
-            rtsp_url=args.rtsp_url,
-            api_port=args.api_port,
-            webrtc_port=args.webrtc_port,
-            funnel_port=args.funnel_port,
-            hub_url=args.hub_url if args.api_key else None,
-            drone_id=args.drone_id if args.api_key else None,
-            api_key=args.api_key or None,
-            public_url=args.public_url,
-            skip_funnel_setup=args.skip_funnel_setup,
-        )
-    
-    # Handle shutdown signals
-    def signal_handler(sig, frame):
-        logger.info("Shutdown signal received")
-        service.stop()
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    try:
-        await service.run()
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-        service.stop()
+    parser.add_argument(
+        "--rtsp-url", required=True,
+        help="Full RTSP URL for the camera (e.g. rtsp://192.168.1.100:8554/stream)",
+    )
+    parser.add_argument(
+        "--api-port", type=int, default=GO2RTC_API_PORT,
+        help=f"go2rtc HTTP API port (default: {GO2RTC_API_PORT})",
+    )
+    parser.add_argument(
+        "--webrtc-port", type=int, default=GO2RTC_WEBRTC_PORT,
+        help=f"go2rtc WebRTC UDP port (default: {GO2RTC_WEBRTC_PORT})",
+    )
+    parser.add_argument(
+        "--funnel-port", type=int, default=TAILSCALE_FUNNEL_PORT,
+        choices=[443, 8443, 10000],
+        help=f"Tailscale funnel port: 443 | 8443 | 10000 (default: {TAILSCALE_FUNNEL_PORT})",
+    )
+    parser.add_argument(
+        "--hub-url",
+        help="Caribou Hub server URL (e.g. https://arrowhub-5j6w8bkt.manus.space)",
+    )
+    parser.add_argument(
+        "--drone-id", default="caribou_001",
+        help="Drone identifier for Hub registration (default: caribou_001)",
+    )
+    parser.add_argument(
+        "--api-key",
+        help="API key for Hub authentication",
+    )
+    parser.add_argument(
+        "--public-url",
+        help="Override public WHEP URL (skip Tailscale auto-detection)",
+    )
+    parser.add_argument(
+        "--skip-funnel-setup", action="store_true",
+        help="Skip tailscale serve/funnel commands (use if already configured externally)",
+    )
+    return parser.parse_args()
 
 
-if __name__ == '__main__':
-    asyncio.run(main())
+# ─── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    args = parse_args()
+
+    # Also check environment variables as fallback (for systemd EnvironmentFile)
+    hub_url = args.hub_url or os.environ.get("HUB_URL")
+    drone_id = args.drone_id or os.environ.get("DRONE_ID", "caribou_001")
+    api_key = args.api_key or os.environ.get("API_KEY")
+
+    service = WebRTCStreamingService(
+        rtsp_url=args.rtsp_url,
+        api_port=args.api_port,
+        webrtc_port=args.webrtc_port,
+        funnel_port=args.funnel_port,
+        hub_url=hub_url,
+        drone_id=drone_id,
+        api_key=api_key,
+        public_url=args.public_url,
+        skip_funnel_setup=args.skip_funnel_setup,
+    )
+
+    setup_signal_handlers(service)
+    asyncio.run(service.run())
+
+
+if __name__ == "__main__":
+    main()
