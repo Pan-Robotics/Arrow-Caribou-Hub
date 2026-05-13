@@ -1,6 +1,6 @@
 # Caribou Hub — Companion Services Reference
 
-**Version:** April 2026
+**Version:** May 2026
 **Author:** Pan Robotics
 
 This document covers all Python companion scripts, systemd services, and install scripts that run on the Raspberry Pi companion computer. Each service handles a specific data pipeline between the drone hardware and the Caribou Hub web server.
@@ -14,8 +14,7 @@ This document covers all Python companion scripts, systemd services, and install
 | Hub Client | `raspberry_pi_client.py` | `caribou-hub-client.service` | `install_hub_client.sh` | Job polling, file delivery, config updates |
 | Telemetry Forwarder | `telemetry_forwarder.py` | `telemetry-forwarder.service` | `install_telemetry_forwarder.sh` | MAVLink + UAVCAN telemetry relay |
 | Logs & OTA | `logs_ota_service.py` | `logs-ota.service` | `install_logs_ota.sh` | FC log download, OTA firmware flash, diagnostics, remote log streaming |
-| Camera Stream | `camera_stream_service.py` | `camera-stream.service` | `install_camera_services.sh` | go2rtc management, Tailscale funnel, stream registration |
-| SIYI Camera Controller | `siyi_camera_controller.py` | `siyi-camera.service` | `install_camera_services.sh` | Gimbal control via SIYI UDP SDK + Socket.IO |
+| Camera Stream | `camera_stream_service.py` | `camera-stream.service` | `install_camera_services.sh` | go2rtc lifecycle management, Tailscale funnel, Hub stream registration with heartbeat |
 
 All services are designed to run as the `alexd` user (configurable during install), auto-restart on failure, and log to journald for remote streaming via the Logs & OTA app.
 
@@ -189,7 +188,6 @@ The diagnostics collector checks the status of these systemd services:
 - `telemetry-forwarder.service`
 - `logs-ota.service`
 - `camera-stream.service`
-- `siyi-camera.service`
 - `caribou-hub-client.service`
 - `go2rtc.service`
 - `tailscale-funnel.service`
@@ -208,62 +206,64 @@ The diagnostics collector checks the status of these systemd services:
 
 ---
 
-## 4. Camera Services
+## 4. Camera Stream Service (`camera_stream_service.py`)
 
-### Camera Stream (`camera_stream_service.py`)
+### Overview
 
-Manages the video streaming pipeline from the SIYI A8 Mini camera to the browser:
+A generic camera streaming service that manages go2rtc for a single RTSP camera source, exposes it via Tailscale Funnel, and registers the WHEP URL with the Caribou Hub for browser-based WebRTC playback. The service is entirely camera-agnostic — it works with any device that provides an RTSP stream.
 
-1. Monitors go2rtc health via its HTTP API
-2. Auto-detects the Tailscale funnel URL by querying `tailscale status`
-3. Registers the WebRTC signaling URL with the Caribou Hub
-4. Handles graceful shutdown (unregisters stream)
-
-### SIYI Camera Controller (`siyi_camera_controller.py`)
-
-Controls the SIYI A8 Mini gimbal via its UDP SDK (port 37260):
-
-- Connects to the Caribou Hub via Socket.IO
-- Receives gimbal commands (rotate, zoom, photo, record, center, nadir)
-- Sends camera status updates (attitude, zoom level, recording state)
-
-### Camera Architecture
+### Architecture
 
 ```
-SIYI A8 Mini ──RTSP──▶ go2rtc ──WebRTC──▶ Browser
-(192.168.144.25)       (port 1984)    (peer-to-peer UDP)
-                            │
-                   Tailscale Funnel
-                   (HTTPS signaling)
+Any RTSP Camera ──RTSP──▶ go2rtc ──WebRTC──▶ Browser
+                          (port 1984)    (peer-to-peer UDP)
+                              │
+                     Tailscale Funnel
+                     (HTTPS signaling only)
 ```
 
-Video flows peer-to-peer via WebRTC. Only the SDP signaling goes through the Tailscale funnel. No video is proxied through the Hub.
+Video flows peer-to-peer via WebRTC. Only the SDP signaling goes through the Tailscale funnel and the Hub's WHEP proxy. No video is proxied through the Hub.
 
-### Camera Controller Commands
+### CLI Arguments
 
-| Action | Description | Parameters |
-|---|---|---|
-| `rotate` | Rotate gimbal at velocity | `yaw`, `pitch` (-100 to 100) |
-| `set_angles` | Set absolute gimbal angles | `yaw` (-135 to 135), `pitch` (-90 to 25) |
-| `center` | Center gimbal | None |
-| `nadir` | Point gimbal straight down | None |
-| `zoom` | Zoom in/out/stop | `direction` (-1, 0, 1) |
-| `set_zoom` | Set specific zoom level | `level` (1.0 to 6.0) |
-| `photo` | Capture photo | None |
-| `record` | Start video recording | None |
-| `stop_record` | Stop video recording | None |
-| `focus` | Auto focus at point | `x`, `y` (0-1000) |
-| `get_status` | Get current status | None |
+```
+--rtsp-url         RTSP source URL (required, e.g., rtsp://192.168.1.100:8554/stream)
+--hub-url          Caribou Hub server URL (from env: WEB_SERVER_URL)
+--drone-id         Drone identifier (from env: DRONE_ID)
+--api-key          API key for authentication (from env: API_KEY)
+--api-port         go2rtc API port (default: 1984)
+--webrtc-port      go2rtc WebRTC port (default: 8555)
+--funnel-port      Tailscale funnel port (default: 443)
+--public-url       Override auto-detected Tailscale URL
+--skip-funnel      Skip Tailscale funnel setup (use for LAN-only access)
+--debug            Enable debug logging
+```
 
-### Network Configuration
+### Class: `WebRTCStreamingService`
 
-| Service | IP Address | Port | Protocol |
-|---|---|---|---|
-| SIYI SDK Control | 192.168.144.25 | 37260 | UDP |
-| Main Stream (4K) | 192.168.144.25 | 8554 | RTSP (`/main.264`) |
-| Sub Stream (720p) | 192.168.144.25 | 8554 | RTSP (`/sub.264`) |
-| go2rtc API | localhost | 1984 | HTTP |
-| go2rtc WebRTC | 0.0.0.0 | 8555 | UDP |
+| Method | Description |
+|---|---|
+| `_start_go2rtc()` | Write YAML config, start go2rtc subprocess, wait for startup |
+| `_stop_go2rtc()` | Graceful SIGTERM → 5s timeout → SIGKILL |
+| `_check_stream_health()` | Poll `/api/streams` for active producers on the `camera` stream |
+| `_detect_webrtc_url()` | Build WHEP URL from Tailscale hostname or `--public-url` override |
+| `_register_stream()` | POST WHEP URL to Hub's `/api/rest/camera/stream-register` |
+| `_unregister_stream()` | POST to Hub's `/api/rest/camera/stream-unregister` on shutdown |
+| `run()` | Main loop: start go2rtc → detect URL → register → health monitor with 5-min heartbeat |
+
+### Hub Registration
+
+The service registers its WHEP URL with the Hub on startup and re-registers every 5 minutes as a heartbeat. The registration payload includes:
+
+```json
+{
+  "api_key": "<drone-api-key>",
+  "drone_id": "<drone-id>",
+  "whep_url": "https://<tailscale-hostname>/api/webrtc?src=camera"
+}
+```
+
+On graceful shutdown (SIGTERM/SIGINT), the service sends an unregister request so the Hub immediately removes the stream URL.
 
 ### Installation
 
@@ -272,18 +272,25 @@ chmod +x install_camera_services.sh
 sudo ./install_camera_services.sh
 ```
 
-The installer handles go2rtc binary installation (auto-detects ARM64/ARM/AMD64), Tailscale authentication and funnel setup, go2rtc configuration, and all four camera-related systemd services.
+The installer handles go2rtc binary installation (auto-detects ARM64/ARMv7/AMD64), Tailscale authentication and funnel setup, RTSP URL configuration, environment file creation, and all three systemd services.
 
 ### Camera Systemd Services
 
 | Service | Description | Dependencies |
 |---|---|---|
-| `go2rtc.service` | RTSP → WebRTC streaming server | network |
+| `go2rtc.service` | RTSP → WebRTC streaming server | network-online |
 | `tailscale-funnel.service` | Exposes go2rtc API to internet | tailscaled, go2rtc |
-| `siyi-camera.service` | Gimbal controller (Socket.IO) | network |
-| `camera-stream.service` | Stream manager + Hub registration | go2rtc, tailscale-funnel |
+| `camera-stream.service` | Stream manager + Hub registration with heartbeat | go2rtc, tailscale-funnel |
 
-Startup order: `go2rtc` → `tailscale-funnel` → `camera-stream` (parallel: `siyi-camera`)
+Startup order: `go2rtc` → `tailscale-funnel` → `camera-stream`
+
+### Network Configuration
+
+| Service | Port | Protocol | Scope |
+|---|---|---|---|
+| go2rtc API | 1984 | HTTP | localhost |
+| go2rtc WebRTC | 8555 | UDP | 0.0.0.0 (for ICE) |
+| Tailscale Funnel | 443 | HTTPS | Public internet |
 
 ---
 
@@ -297,7 +304,7 @@ All companion scripts require Python 3.7+ on the Raspberry Pi. Each install scri
 
 1. **Hub Client** — required for all job-based operations
 2. **Telemetry Forwarder** — required for live flight telemetry
-3. **Camera Services** — required for video streaming and gimbal control
+3. **Camera Stream** — required for video streaming
 4. **Logs & OTA** — required for FC log management, firmware updates, and diagnostics
 
 ### Copying Files to the Pi
@@ -316,33 +323,33 @@ ssh alexd@your-pi-ip
 ```bash
 # Check status of all services
 sudo systemctl status caribou-hub-client telemetry-forwarder logs-ota \
-    camera-stream siyi-camera go2rtc tailscale-funnel
+    camera-stream go2rtc tailscale-funnel
 
 # View live logs for a specific service
-sudo journalctl -u logs-ota -f
+sudo journalctl -u camera-stream -f
 
 # Restart a service
 sudo systemctl restart telemetry-forwarder
 
 # Stop all Caribou services
 sudo systemctl stop caribou-hub-client telemetry-forwarder logs-ota \
-    siyi-camera camera-stream tailscale-funnel go2rtc
+    camera-stream tailscale-funnel go2rtc
 ```
 
 ### Updating a Script
 
 ```bash
 # Stop the service
-sudo systemctl stop logs-ota
+sudo systemctl stop camera-stream
 
 # Copy the new version
-scp logs_ota_service.py alexd@your-pi-ip:/home/alexd/caribou/
+scp camera_stream_service.py alexd@your-pi-ip:/home/alexd/caribou/
 
 # Restart
-sudo systemctl start logs-ota
+sudo systemctl start camera-stream
 
 # Verify
-sudo journalctl -u logs-ota -f
+sudo journalctl -u camera-stream -f
 ```
 
 ---
@@ -410,19 +417,6 @@ tailscale funnel status
 sudo journalctl -u camera-stream -f
 ```
 
-### Gimbal Not Responding
-
-```bash
-# Check camera controller service
-sudo systemctl status siyi-camera
-
-# Verify camera IP
-ping 192.168.144.25
-
-# Check Socket.IO connection
-sudo journalctl -u siyi-camera -f
-```
-
 ---
 
 ## 7. Security
@@ -436,19 +430,7 @@ All services follow these security practices:
 - **Job expiry:** Pending jobs with an `expiresAt` timestamp are automatically expired by the reaper if they are never picked up.
 - **Superuser check:** `logs_ota_service.py` warns at startup if not running as root (needed for journalctl, systemctl, serial port access). Use `--allow-non-root` to suppress.
 - **Systemd hardening:** Install scripts configure `ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true`, and restricted `ReadWritePaths`.
-- API keys are stored in `forwarder.env` with restricted file permissions
-- All Hub communication uses HTTPS
-- API keys should be rotated regularly via the Caribou Hub web UI
-
----
-
-## 8. SIYI SDK Protocol Reference
-
-The SIYI A8 Mini uses a binary frame format over UDP:
-
-```
-| STX (2) | CTRL (1) | DATA_LEN (2) | SEQ (2) | CMD_ID (1) | DATA (N) | CRC16 (2) |
-| 0x55 0x66 |   0x01   |    N bytes   |  seq++  |    cmd     |   ...    |  CRC16    |
-```
-
-CRC16 uses CRC-16-CCITT (polynomial 0x1021, initial value 0x0000).
+- **Environment file permissions:** Camera stream installer sets `forwarder.env` to `chmod 600` (owner-only read/write).
+- API keys are stored in `forwarder.env` with restricted file permissions.
+- All Hub communication uses HTTPS.
+- API keys should be rotated regularly via the Caribou Hub web UI.

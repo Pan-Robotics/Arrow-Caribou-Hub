@@ -10,7 +10,7 @@
 
 Caribou Hub is a modular, web-based ground station for managing unmanned aerial vehicle (UAV) data pipelines. It aggregates real-time sensor streams, post-flight analytics, drone configuration, and a developer-extensible app framework into a single-page application. The platform is designed around a **hub-and-spoke model**: a persistent sidebar provides instant access to any installed application, while a pluggable App Builder allows third-party developers to create new data pipeline apps without modifying the core codebase.
 
-The system connects to one or more companion computers (typically Raspberry Pi units mounted on drones) that run Python companion scripts. These scripts push sensor data — LiDAR point clouds, MAVLink/UAVCAN telemetry, gimbal camera status, flight controller logs, system diagnostics, and arbitrary payloads — to Caribou Hub's REST endpoints. The server validates, stores, and broadcasts the data in real time over WebSocket to all connected browser clients. A polling-based job queue enables the reverse direction: the web UI can push files, configuration updates, and commands back to the companion computer.
+The system connects to one or more companion computers (typically Raspberry Pi units mounted on drones) that run Python companion scripts. These scripts push sensor data — LiDAR point clouds, MAVLink/UAVCAN telemetry, camera streams, flight controller logs, system diagnostics, and arbitrary payloads — to Caribou Hub's REST endpoints. The server validates, stores, and broadcasts the data in real time over WebSocket to all connected browser clients. A polling-based job queue enables the reverse direction: the web UI can push files, configuration updates, and commands back to the companion computer.
 
 ### Technology Stack
 
@@ -59,7 +59,6 @@ The architecture consists of three tiers: the browser-based frontend, the Node.j
 │  telemetry_forwarder.py → POST /api/rest/telemetry/ingest           │
 │  logs_ota_service.py → FC logs, OTA firmware, diagnostics, log stream│
 │  camera_stream_service.py → go2rtc management + stream registration │
-│  siyi_camera_controller.py → Gimbal control via Socket.IO           │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -104,17 +103,20 @@ A real-time flight controller data dashboard receiving data via Socket.IO `telem
 | Battery (UAVCAN) | Voltage, current, temperature, state of charge |
 | Flight Status | In-air or on-ground indicator |
 
-### 3.4 Camera Feed & Gimbal Control
+### 3.4 Camera Feed (Multi-Stream)
 
-A gimbal camera control and status monitoring interface. Camera status arrives via Socket.IO `camera_status` events, while commands are emitted as `camera_command` events and forwarded to the companion computer's registered socket.
+A generic, multi-stream camera viewer where users can add as many camera sources as they want. Each stream connects to a go2rtc instance running on a companion computer, with video delivered via WebRTC (WHEP protocol) through Tailscale Funnel for sub-second latency. The Hub acts as a WHEP SDP relay — only signaling passes through the server; media flows peer-to-peer.
 
 | Feature | Description |
 |---|---|
-| Gimbal Control | D-pad for yaw/pitch rotation, center and nadir presets |
-| Zoom Slider | Adjustable zoom level sent as camera commands |
-| Photo / Record | Trigger photo capture or toggle video recording |
-| Status Display | Connection state, gimbal angles, recording indicator, HDR and TF card status |
-| Command Relay | Commands forwarded via WebSocket to the companion computer |
+| Multi-Stream Grid | Responsive layout: 1 column on mobile, 2 on tablet, 3 on desktop |
+| Add Stream Dialog | Two tabs: "From Drone" (registered drones with active streams) and "Manual URL" (any WHEP URL) |
+| Stream Widget | Per-stream tile with video, connection status, quality bars, label, and controls |
+| Drag-and-Drop Reorder | Reorder stream tiles by dragging |
+| Fullscreen Toggle | Expand any stream to fill the viewport |
+| Per-Stream Settings | Popover to change label or switch source |
+| Connection Quality | Real-time stats (bitrate, framerate, packet loss) displayed as quality bars |
+| localStorage Persistence | Stream configurations persist across page reloads |
 
 ### 3.5 Flight Analytics
 
@@ -236,8 +238,7 @@ These endpoints are designed for non-tRPC clients, primarily the companion compu
 | `/api/rest/pointcloud/ingest` | POST | Receive LiDAR scan data |
 | `/api/rest/pointcloud/latest/:droneId` | GET | Polling fallback for latest scan |
 | `/api/rest/telemetry/ingest` | POST | Receive flight telemetry |
-| `/api/rest/camera/status` | POST | Receive camera and gimbal status |
-| `/api/rest/camera/stream-register` | POST | Register WebRTC stream URL from companion |
+| `/api/rest/camera/stream-register` | POST | Register WHEP URL (companion heartbeat) |
 | `/api/rest/camera/stream-unregister` | POST | Unregister WebRTC stream URL |
 | `/api/rest/camera/stream-status/:droneId` | GET | Get current stream URL for a drone |
 | `/api/rest/camera/whep-proxy/:droneId` | POST | WHEP SDP proxy — relays WebRTC signaling to go2rtc on companion |
@@ -262,7 +263,7 @@ Socket.IO handles all real-time data distribution. The server uses room-based ro
 | `subscribe_app` / `unsubscribe_app` | Client → Server | Join or leave a custom app data room |
 | `subscribe_stream` / `unsubscribe_stream` | Client → Server | Join or leave a named data stream |
 | `register_companion` | Client → Server | Companion computer self-registration |
-| `camera_command` | Client → Server | Forward gimbal or camera command to companion |
+| `camera_command` | Client → Server | Forward camera command to companion |
 | `pointcloud` | Server → Client | LiDAR scan data broadcast |
 | `telemetry` | Server → Client | Flight telemetry broadcast |
 | `camera_status` | Server → Client | Camera status broadcast |
@@ -318,15 +319,14 @@ All binary data is stored in S3-compatible object storage. The database holds on
 
 ### 6.1 Data Ingestion (Pi → Hub)
 
-Five Python companion scripts run on the Raspberry Pi, each responsible for a specific data pipeline. All REST requests include an `api_key` and `drone_id` for authentication.
+Four Python companion scripts run on the Raspberry Pi, each responsible for a specific data pipeline. All REST requests include an `api_key` and `drone_id` for authentication.
 
 | Script | Endpoint(s) | Payload |
 |---|---|---|
 | `raspberry_pi_client.py` | Job polling via tRPC | Job execution, file upload, config update |
 | `telemetry_forwarder.py` | `/api/rest/telemetry/ingest` | MAVLink attitude, position, GPS, battery (FC + UAVCAN via DroneCAN) |
 | `logs_ota_service.py` | `/api/rest/logs/fc-list`, `fc-progress`, `fc-upload`, `/api/rest/firmware/progress`, `/api/rest/diagnostics/report` | FC log files, firmware flash stages, system diagnostics |
-| `camera_stream_service.py` | `/api/rest/camera/register-stream` | WebRTC signaling URL (go2rtc + Tailscale funnel) |
-| `siyi_camera_controller.py` | Socket.IO `camera_status` | Gimbal angles, recording state, connection status |
+| `camera_stream_service.py` | `/api/rest/camera/stream-register`, `/api/rest/camera/stream-unregister` | WHEP URL registration with 5-min heartbeat (go2rtc + Tailscale funnel) |
 
 Additionally, the LiDAR relay (part of the main relay script on the Feather companion computer) POSTs to `/api/rest/pointcloud/ingest`, and custom app payloads POST to `/api/rest/payload/{appId}/ingest`.
 
@@ -392,7 +392,7 @@ Authentication operates on two separate planes. **User authentication** flows th
 |---|---|---|
 | RPLidar Terrain Mapping | **Implemented** | 2D/3D views, demo mode, real-time WebSocket streaming |
 | Flight Telemetry | **Implemented** | Full MAVLink + UAVCAN telemetry dashboard |
-| Camera Feed & Gimbal | **Implemented** | Status display and command relay to companion computer |
+| Camera Feed (Multi-Stream) | **Implemented** | Generic multi-stream WebRTC viewer with WHEP SDP proxy, drag-and-drop grid, fullscreen, quality bars |
 | Flight Analytics | **Implemented** | 18 chart types, mode timeline, GPS map, brush zoom, compare mode, instant restore |
 | Drone Configuration | **Implemented** | API keys, connection test, file upload, job management, config script generation |
 | App Store | **Implemented** | Install and uninstall built-in and custom apps |

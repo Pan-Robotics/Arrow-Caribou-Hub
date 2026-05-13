@@ -1549,3 +1549,10 @@
 - [x] Companion: camera_stream_service.py (go2rtc manager + Hub registration + heartbeat)
 - [x] Companion: install_camera_services.sh (interactive installer)
 - [x] Companion: systemd service files (go2rtc, tailscale-funnel, camera-stream)
+
+## Documentation Updates — Camera Feed Rewrite (May 2026)
+- [x] Update README.md: remove SIYI references from Camera Feed section, companion scripts table, and key directories
+- [x] Rewrite docs/architecture/Caribou_Camera_Feed_Architecture.md for generic multi-stream WebRTC architecture
+- [x] Update companion_scripts/COMPANION_SERVICES.md: remove SIYI service, update camera section
+- [x] Update docs/architecture/caribou-hub-architecture.md: fix camera references, remove siyi_camera_controller.py
+- [x] Update docs/README.md index: update Camera Feed Architecture description

@@ -9,7 +9,7 @@ This directory contains all architecture documents, pipeline references, and spe
 | Document | Description |
 |---|---|
 | [caribou-hub-architecture.md](architecture/caribou-hub-architecture.md) | Master architecture document — full system overview, all endpoints, database schema, companion scripts, frontend apps, and deployment topology |
-| [Caribou_Camera_Feed_Architecture.md](architecture/Caribou_Camera_Feed_Architecture.md) | Camera feed pipeline — SIYI A8 Mini, go2rtc, Tailscale funnel, WebRTC signaling, gimbal control protocol |
+| [Caribou_Camera_Feed_Architecture.md](architecture/Caribou_Camera_Feed_Architecture.md) | Camera feed pipeline — generic multi-stream architecture, go2rtc, Tailscale funnel, WHEP SDP proxy, WebRTC signaling, frontend multi-stream UI |
 | [flight-analytics-integration-analysis.md](architecture/flight-analytics-integration-analysis.md) | Integration analysis mapping the Flight-Log-Analyser tool to Caribou Hub infrastructure — parser reuse, chart rendering, storage, and implementation phases |
 
 ## Setup Guides
@@ -49,7 +49,7 @@ Companion script documentation is consolidated in a single file:
 
 | Document | Description |
 |---|---|
-| [companion_scripts/COMPANION_SERVICES.md](../companion_scripts/COMPANION_SERVICES.md) | All 5 companion services — Hub Client, Telemetry Forwarder, Logs & OTA, Camera Stream, SIYI Camera Controller — with CLI args, install steps, troubleshooting, and security |
+| [companion_scripts/COMPANION_SERVICES.md](../companion_scripts/COMPANION_SERVICES.md) | All 4 companion services — Hub Client, Telemetry Forwarder, Logs & OTA, Camera Stream — with CLI args, install steps, troubleshooting, and security |
 
 ## Archive
 

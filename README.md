@@ -39,7 +39,6 @@ The system consists of three tiers: the browser-based frontend, the Node.js serv
 │  telemetry_forwarder.py → POST /api/rest/telemetry/ingest            │
 │  raspberry_pi_client.py → tRPC droneJobs.getPendingJobs (polling)    │
 │  camera_stream_service.py → POST /api/rest/camera/stream-register    │
-│  siyi_camera_controller.py → Socket.IO (gimbal commands/status)      │
 │  logs_ota_service.py → REST + Socket.IO (logs, OTA, diagnostics)     │
 │    ├─ FCLogSyncer: HTTP GET from FC net_webserver (primary)          │
 │    ├─ Multipart upload to Hub S3 (preferred, base64 fallback)        │
@@ -116,7 +115,6 @@ companion_scripts/
   telemetry_forwarder.py         ← MAVLink + UAVCAN telemetry relay
   raspberry_pi_client.py         ← Job queue poller and file delivery client
   camera_stream_service.py       ← go2rtc + Tailscale WebRTC stream manager
-  siyi_camera_controller.py      ← SIYI A8 Mini gimbal controller (Socket.IO)
   logs_ota_service.py            ← FC log download, OTA firmware, diagnostics, remote logs
   *.service                      ← Systemd unit files for each companion script
   install_*.sh                   ← Interactive install scripts for Pi deployment
@@ -127,7 +125,7 @@ docs/
   CARIBOU_DEPLOYMENT_TEMPLATE.md  ← Edge deployment template for custom parsers
   architecture/                  ← System architecture documents
   sdk/                           ← SDK documentation (5 levels)
-  reference/                     ← SIYI SDK docs, Flight-Log-Analyser reference
+  reference/                     ← Flight-Log-Analyser reference, legacy SIYI SDK docs
   archive/                       ← Historical test findings and debug notes
 shared/
   types.ts                       ← Shared TypeScript types
@@ -145,9 +143,9 @@ Real-time 2D LiDAR point cloud visualization from an RPLidar sensor. Supports bo
 
 Real-time flight controller dashboard displaying attitude (roll, pitch, yaw), position (lat, lon, altitude), GPS status, battery voltage (FC and UAVCAN), and flight status. Data arrives via the `telemetry_forwarder.py` companion script, which reads MAVLink telemetry via MAVSDK and optionally monitors UAVCAN battery data via DroneCAN.
 
-### Camera Feed & Gimbal Control
+### Camera Feed (Multi-Stream)
 
-Gimbal camera interface with D-pad rotation controls, zoom slider, photo/record triggers, and live status display (connection, angles, recording, HDR). Video streams via WebRTC through go2rtc and Tailscale Funnel for sub-second latency. Commands relay through Socket.IO to the `siyi_camera_controller.py` companion script, which communicates with the SIYI A8 Mini via its UDP SDK.
+A generic, multi-stream camera application where users can add as many camera sources as they want. Each stream connects to a go2rtc instance running on a companion computer, with video delivered via WebRTC through Tailscale Funnel for sub-second latency. The Hub acts as a WHEP SDP relay — only signaling passes through the server; media flows peer-to-peer. Users can add streams from registered drones (auto-discovered via companion heartbeat) or by entering a manual WHEP URL. The interface provides a responsive grid layout (1/2/3 columns), drag-and-drop reorder, per-stream fullscreen toggle, connection quality bars, and localStorage persistence of stream configurations.
 
 ### Flight Analytics
 
@@ -163,7 +161,7 @@ Four-tab interface for remote flight controller management and companion compute
 
 **Diagnostics** — Live system health gauges (CPU, memory, disk, temperature) with color-coded thresholds, systemd service status grid (active/inactive/failed), and network interface table (IP, RX/TX bytes). Data collected every 10 seconds via `psutil` on the companion computer.
 
-**Remote Logs** — Real-time terminal view of `journalctl` output from any companion service (telemetry-forwarder, logs-ota, camera-stream, siyi-camera, caribou-hub-client). Start/stop streaming with service selector dropdown. Lines arrive via Socket.IO in buffered batches.
+**Remote Logs** — Real-time terminal view of `journalctl` output from any companion service (telemetry-forwarder, logs-ota, camera-stream, caribou-hub-client). Start/stop streaming with service selector dropdown. Lines arrive via Socket.IO in buffered batches.
 
 ### Drone Configuration
 
@@ -201,7 +199,6 @@ Five companion scripts run on the Raspberry Pi, each as a systemd service with a
 | Telemetry Forwarder | `telemetry_forwarder.py` | `telemetry-forwarder.service` | MAVLink + UAVCAN telemetry relay to Hub |
 | Hub Client | `raspberry_pi_client.py` | `caribou-hub-client.service` | Job queue polling and file delivery |
 | Camera Stream | `camera_stream_service.py` | `camera-stream.service` | go2rtc + Tailscale WebRTC stream management |
-| SIYI Camera | `siyi_camera_controller.py` | `siyi-camera.service` | Gimbal control via SIYI UDP SDK |
 | Logs & OTA | `logs_ota_service.py` | `logs-ota.service` | FC log download, OTA flash, diagnostics, remote logs |
 
 Each service has a corresponding install script (`install_*.sh`) that handles dependency installation, environment configuration, script deployment, and systemd service setup.
@@ -214,8 +211,8 @@ Python companion scripts POST sensor data to REST endpoints, authenticated with 
 |---|---|---|---|
 | `/api/rest/pointcloud/ingest` | POST | Polar scan points and statistics | External LiDAR relay |
 | `/api/rest/telemetry/ingest` | POST | MAVLink attitude, position, GPS, battery | `telemetry_forwarder.py` |
-| `/api/rest/camera/status` | POST | Gimbal angles, recording state, connection | `siyi_camera_controller.py` |
-| `/api/rest/camera/stream-register` | POST | WebRTC signaling URL registration | `camera_stream_service.py` |
+| `/api/rest/camera/stream-register` | POST | WHEP URL registration (companion heartbeat) | `camera_stream_service.py` |
+| `/api/rest/camera/stream-unregister` | POST | WHEP URL deregistration (graceful shutdown) | `camera_stream_service.py` |
 | `/api/rest/flightlog/upload` | POST | Base64-encoded `.BIN` files | `telemetry_forwarder.py` |
 | `/api/rest/logs/fc-list` | POST | Discovered FC log files from SD card | `logs_ota_service.py` |
 | `/api/rest/logs/fc-progress` | POST | FC log download progress updates | `logs_ota_service.py` |
@@ -260,8 +257,7 @@ All ingest endpoints require `api_key` and `drone_id` in the request body.
 | `/api/rest/pointcloud/ingest` | POST | Receive LiDAR scan data |
 | `/api/rest/pointcloud/latest/:droneId` | GET | Polling fallback for latest scan |
 | `/api/rest/telemetry/ingest` | POST | Receive flight telemetry |
-| `/api/rest/camera/status` | POST | Receive camera and gimbal status |
-| `/api/rest/camera/stream-register` | POST | Register WebRTC stream URL |
+| `/api/rest/camera/stream-register` | POST | Register WHEP URL (companion heartbeat) |
 | `/api/rest/camera/stream-unregister` | POST | Unregister WebRTC stream URL |
 | `/api/rest/camera/stream-status/:droneId` | GET | Get current stream URL |
 | `/api/rest/camera/whep-proxy/:droneId` | POST | WHEP SDP proxy — relays WebRTC signaling to go2rtc on companion |
@@ -310,11 +306,11 @@ Socket.IO handles all real-time data distribution using room-based routing.
 | `subscribe_logs` / `unsubscribe_logs` | Client → Server | Join or leave logs room for a drone |
 | `subscribe_stream` / `unsubscribe_stream` | Client → Server | Join or leave a data stream room |
 | `register_companion` | Client → Server | Companion computer self-registration |
-| `camera_command` | Client → Server | Forward gimbal command to companion |
+| `camera_command` | Client → Server | Forward camera command to companion |
 | `log_stream_request` | Client → Server → Pi | Start/stop remote journalctl stream |
 | `pointcloud` | Server → Client | LiDAR scan data |
 | `telemetry` | Server → Client | Flight telemetry data |
-| `camera_status` | Server → Client | Camera and gimbal status |
+| `camera_status` | Server → Client | Camera status |
 | `camera_response` | Server → Client | Camera command response |
 | `camera_stream` | Server → Client | WebRTC stream URL update |
 | `app_data` | Server → Client | Custom app parsed data |
@@ -411,7 +407,7 @@ sudo ./install_hub_client.sh
 # Telemetry forwarder (MAVLink + UAVCAN relay)
 sudo ./install_telemetry_forwarder.sh
 
-# Camera services (go2rtc + Tailscale + gimbal controller)
+# Camera services (go2rtc + Tailscale + stream registration)
 sudo ./install_camera_services.sh
 
 # Logs & OTA (FC logs, firmware flash, diagnostics, remote logs)
@@ -428,7 +424,7 @@ Each installer prompts for the Hub URL, drone ID, API key, and service-specific 
 |---|---|
 | RPLidar Terrain Mapping | **Implemented** |
 | Flight Telemetry | **Implemented** |
-| Camera Feed & Gimbal Control | **Implemented** |
+| Camera Feed (Multi-Stream) | **Implemented** |
 | Flight Analytics (18 charts, GPS map, brush zoom, compare) | **Implemented** |
 | Drone Configuration & API Keys | **Implemented** |
 | Logs & OTA Updates (FC logs, firmware flash, diagnostics, remote logs) | **Implemented** |
@@ -451,7 +447,6 @@ MIT License
 - **RPLidar C1** by SLAMTEC
 - **ArduPilot** DataFlash log format, MAVFTP protocol, and [`net_webserver.lua`](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Scripting/applets/net_webserver.lua) HTTP file server
 - **MAVSDK** for flight controller communication
-- **SIYI** A8 Mini gimbal camera SDK
 - **shadcn/ui** for UI components
 - **tRPC** for type-safe APIs
 - **Manus Platform** for hosting and deployment
