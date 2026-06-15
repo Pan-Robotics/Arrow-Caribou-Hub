@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 
 /**
  * WebRTC Camera Stream Pipeline Tests
- * Tests the WebRTC stream registration, signaling URL relay, and client integration.
- * Replaces the old HLS pipeline tests.
+ * Tests the WebRTC (WHEP) stream registration, signaling URL relay, and client
+ * integration. The Hub streams camera video exclusively over WebRTC.
  */
 
 // ─── WebRTC Stream Registry ─────────────────────────────────────

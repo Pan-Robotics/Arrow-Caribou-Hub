@@ -168,7 +168,7 @@ The server is built on Node.js using the Express.js framework for HTTP routing a
 
 **Command Dispatcher**: Receives commands from the web interface (via HTTP POST requests) and translates them into appropriate protocol messages. For example, a "Start Recording" button click generates an HTTP POST to `/api/payloads/camera1/command` with body `{"action": "start_recording"}`. The command dispatcher looks up the camera payload's driver, determines the appropriate protocol (MAVLink COMMAND_LONG, HTTP POST to payload, etc.), and sends the command. It waits for an acknowledgment (with a 5-second timeout) and returns success or failure to the web client.
 
-**Video Streaming Proxy**: Receives video streams from payloads (typically H.264 over UDP or RTSP) and re-encodes them for web delivery using WebRTC or HLS (HTTP Live Streaming). WebRTC provides the lowest latency (50-100 ms) but requires modern browsers and STUN/TURN servers for NAT traversal. HLS has higher latency (2-5 seconds) but works on all browsers and is easier to deploy. The proxy can transcode multiple streams simultaneously, adjusting bitrate and resolution based on available bandwidth.
+**Video Streaming Proxy**: Receives video streams from payloads (typically H.264 over UDP or RTSP) and delivers them to the browser over WebRTC (WHEP). A go2rtc instance on the companion ingests the camera's RTSP/UDP feed and serves a WHEP endpoint; the Hub relays only the WebRTC signaling so media flows peer-to-peer for the lowest latency (sub-second, ~50-100 ms). WebRTC is used exclusively — HLS is not used as its higher latency (2-5 s) is unsuitable for teleoperation. The proxy can serve multiple streams simultaneously.
 
 **Mission Planner**: Provides a map-based interface for creating and editing waypoint missions. The interface uses Leaflet.js for map rendering, allowing operators to click on the map to add waypoints, draw survey areas, or define geofence boundaries. The mission planner generates MAVLink MISSION_ITEM_INT messages and uploads them to the flight controller via the MAVLink Routing Daemon.
 
@@ -201,8 +201,8 @@ socket.on('payload_telemetry', (data) => {
 
 **Video Streaming Endpoints**:
 - `rtsp://companion-ip:8554/camera1` - RTSP stream for external players (VLC, ffplay)
-- `http://companion-ip:8080/hls/camera1/index.m3u8` - HLS stream for web browsers
-- WebRTC signaling via Socket.IO for low-latency streaming
+- `http://companion-ip:1984/api/whep?src=camera1` - WebRTC (WHEP) endpoint served by go2rtc for web browsers
+- WebRTC signaling relayed by the Hub for low-latency, peer-to-peer streaming
 
 #### Configuration
 
