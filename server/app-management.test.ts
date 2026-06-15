@@ -34,16 +34,16 @@ const BUILT_IN_APP_INFO: Record<string, {
   },
   camera: {
     name: "Camera Feed",
-    description: "Live video stream from SIYI A8 mini gimbal camera with gimbal control, zoom, recording, and snapshot capabilities via RTSP-to-HLS streaming.",
+    description: "Generic multi-stream camera app. Add as many camera sources as you need; each connects to a go2rtc instance and is delivered peer-to-peer via WebRTC (WHEP) for sub-second latency.",
     category: "Media",
-    dataStreams: ["camera_status"],
+    dataStreams: [],
     features: [
-      "Live RTSP video stream via HLS",
-      "Gimbal yaw and pitch control",
-      "Zoom level adjustment",
-      "Recording start/stop",
-      "Snapshot capture",
-      "Camera connection status monitoring",
+      "Multiple simultaneous camera streams",
+      "WebRTC (WHEP) delivery with sub-second latency",
+      "Add streams from registered drones or a manual WHEP URL",
+      "Responsive grid layout with drag-and-drop reorder",
+      "Per-stream fullscreen and connection-quality indicators",
+      "Stream configuration persisted locally",
     ],
   },
 };
@@ -189,8 +189,8 @@ describe('App Management - Descriptions', () => {
 
   it('should return built-in description for camera', () => {
     const desc = getAppDescription(mockBuiltInCamera);
-    expect(desc).toContain("SIYI A8 mini");
-    expect(desc).toContain("RTSP");
+    expect(desc).toContain("multi-stream");
+    expect(desc).toContain("WebRTC");
   });
 
   it('should return custom app description', () => {
@@ -283,7 +283,8 @@ describe('App Management - Built-in App Metadata', () => {
     expect(info).toBeDefined();
     expect(info.name).toBe("Camera Feed");
     expect(info.category).toBe("Media");
-    expect(info.dataStreams).toContain("camera_status");
+    // The generic multi-stream camera app no longer monitors the camera_status pipeline.
+    expect(info.dataStreams).not.toContain("camera_status");
     expect(info.features.length).toBeGreaterThan(0);
   });
 

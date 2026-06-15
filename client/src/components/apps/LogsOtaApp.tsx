@@ -1169,7 +1169,6 @@ function RemoteLogsTab({
     { value: "telemetry-forwarder", label: "Telemetry Forwarder" },
     { value: "logs-ota", label: "Logs & OTA" },
     { value: "camera-stream", label: "Camera Stream" },
-    { value: "siyi-camera", label: "SIYI Camera" },
     { value: "caribou-hub-client", label: "Hub Client" },
   ];
 

@@ -79,7 +79,7 @@ export default function AppStore({ onInstallApp, onManageApps, editingAppId, onC
     {
       id: "camera",
       name: "Camera Feed",
-      description: "Live video stream from SIYI A8 mini gimbal camera with gimbal control and recording",
+      description: "Multi-stream live video from any companion camera via WebRTC (sub-second latency)",
       category: "Media",
       icon: Camera,
       installed: false,

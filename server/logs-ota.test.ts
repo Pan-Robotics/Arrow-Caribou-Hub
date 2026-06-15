@@ -356,8 +356,12 @@ describe("Logs & OTA Updates - Frontend Component", () => {
     expect(source).toContain("log_stream_request");
     expect(source).toContain("logs-ota");
     expect(source).toContain("camera-stream");
-    expect(source).toContain("siyi-camera");
+    expect(source).toContain("telemetry-forwarder");
     expect(source).toContain("caribou-hub-client");
+  });
+
+  it("no longer offers the obsolete siyi-camera log source", () => {
+    expect(source).not.toContain("siyi-camera");
   });
 
   it("shows connection status badge", () => {

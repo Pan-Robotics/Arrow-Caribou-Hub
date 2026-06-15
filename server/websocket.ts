@@ -295,7 +295,7 @@ export function broadcastCameraResponse(droneId: string, response: any) {
 
 /**
  * Broadcast camera stream URL to subscribed clients.
- * Called when companion computer registers/unregisters an HLS stream.
+ * Called when a companion computer registers/unregisters a WebRTC (WHEP) stream.
  */
 export function broadcastCameraStream(droneId: string, streamUrl: string | null) {
   if (!io) {

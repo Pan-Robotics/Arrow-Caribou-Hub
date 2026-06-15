@@ -2265,7 +2265,6 @@ class DiagnosticsCollector:
     MONITORED_SERVICES = [
         "telemetry-forwarder.service",
         "camera-stream.service",
-        "siyi-camera.service",
         "logs-ota.service",
         "caribou-hub-client.service",
     ]
