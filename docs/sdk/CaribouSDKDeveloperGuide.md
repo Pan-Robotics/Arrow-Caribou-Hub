@@ -29,7 +29,6 @@ The system supports five concurrent data pipelines: telemetry (MAVLink + UAVCAN)
 │    telemetry_forwarder.py   — MAVLink + UAVCAN → Hub            │
 │    logs_ota_service.py      — FC logs, OTA, diagnostics          │
 │    camera_stream_service.py — go2rtc + Tailscale stream mgmt     │
-│    siyi_camera_controller.py— Gimbal control (SIYI UDP SDK)      │
 │                                                                  │
 │  Connects to FC via Ethernet (MAVLink) and CAN bus (DroneCAN)    │
 └──────────┬──────────────────────────────┬───────────────────────┘
@@ -47,17 +46,17 @@ The system supports five concurrent data pipelines: telemetry (MAVLink + UAVCAN)
 
 ## 3. Network Configuration
 
-The Caribou network is flat — no DHCP runs on the Pi (Siyi firmware conflicts with DHCP servers). All IPs are static on the `192.168.144.0/24` subnet.
+The Caribou network is flat — no DHCP runs on the Pi. All IPs are static on the `192.168.144.0/24` subnet.
 
 ### Reserved Addresses (Do Not Use)
 
 | IP | Device |
 |---|---|
-| 192.168.144.11 | Siyi air unit |
-| 192.168.144.12 | Siyi ground unit |
-| 192.168.144.20 | Android GCS (Siyi reserved) |
-| 192.168.144.25 | Siyi A8 Mini camera |
-| 192.168.144.60 | Siyi camera reserved |
+| 192.168.144.11 | Datalink air unit |
+| 192.168.144.12 | Datalink ground unit |
+| 192.168.144.20 | Ground control station (reserved) |
+| 192.168.144.25 | Payload camera |
+| 192.168.144.60 | Camera (reserved) |
 | 192.168.144.50 | Raspberry Pi (companion computer) |
 | 192.168.144.51 | Flight controller |
 
@@ -79,7 +78,7 @@ Developer-assigned static range: `192.168.144.100` – `192.168.144.199`
 | Companion → FC | Ethernet (MAVLink) | `192.168.144.51`, also CAN bus for DroneCAN |
 | Companion → FC Web Server | HTTP | `http://192.168.144.51:8080` (net_webserver.lua, FC log access) |
 | Companion → Payloads | Ethernet | `192.168.144.100–.199` via integrated switch |
-| Companion → Siyi Camera | Ethernet | `192.168.144.25` (RTSP stream + UDP SDK) |
+| Companion → Payload Camera | Ethernet | `192.168.144.25` (RTSP stream) |
 | Mission Planner → FC | RF telemetry | 915 MHz / 433 MHz radio (MAVLink) |
 
 ---
@@ -135,11 +134,7 @@ CLI: python3 logs_ota_service.py \
 
 ### 4.4 Camera Stream Service (`camera_stream_service.py`)
 
-Manages go2rtc process lifecycle, Tailscale funnel for public WHEP access, and stream registration with Hub. Monitors Siyi camera availability and auto-registers/unregisters streams.
-
-### 4.5 SIYI Camera Controller (`siyi_camera_controller.py`)
-
-Bridges Hub Socket.IO commands to the Siyi gimbal via UDP SDK (`192.168.144.25:37260`). Supports pan/tilt, zoom, photo capture, video record, and gimbal mode switching.
+Manages go2rtc process lifecycle, Tailscale funnel for public WHEP access, and stream registration with Hub. Monitors payload camera availability and auto-registers/unregisters streams.
 
 ---
 
@@ -276,14 +271,14 @@ chmod +x install_*.sh
 ./install_hub_client.sh          # Job polling
 ./install_telemetry_forwarder.sh # Telemetry streaming
 ./install_logs_ota.sh            # FC logs + OTA + diagnostics
-./install_camera_services.sh     # Camera stream + SIYI controller
+./install_camera_services.sh     # Camera stream (go2rtc + Tailscale)
 ```
 
 ### Step 4: Verify Connectivity
 
 ```bash
 # Check all services are running
-sudo systemctl status caribou-hub-client telemetry-forwarder logs-ota camera-stream siyi-camera
+sudo systemctl status caribou-hub-client telemetry-forwarder logs-ota camera-stream
 
 # Test Hub connectivity
 curl -X POST https://your-hub.com/api/rest/test-connection \
@@ -604,7 +599,7 @@ sudo journalctl -u caribou-hub-client -f
 
 ### 10.2 Camera Stream Setup
 
-This sets up live WebRTC video from the SIYI A8 Mini camera through the Hub.
+This sets up live WebRTC video from a payload camera (any RTSP/UDP H.264 source) through the Hub.
 
 **Step 1 — Verify camera connectivity.** From the Pi:
 
@@ -639,20 +634,20 @@ tailscale funnel status
 # Should show the go2rtc port being funneled
 ```
 
-**Step 5 — Verify in Hub.** Open the Camera Feed app in the sidebar. You should see:
+**Step 5 — Verify in Hub.** Open the Camera Feed app in the sidebar. The app is a generic multi-stream viewer; you should see:
 
-- Live WebRTC video stream with latency stats (RTT, jitter, bitrate, FPS)
-- Gimbal controls: pan/tilt joystick, zoom slider (1x–6x), photo capture, video record toggle
+- A responsive grid of live WebRTC streams (add streams from registered drones or a manual WHEP URL)
+- Per-stream latency stats (RTT, jitter, bitrate, FPS) and fullscreen toggle
 - Connection quality indicator (green/yellow/red bars)
 
-**Step 6 — Gimbal control.** The SIYI camera controller bridges Hub Socket.IO commands to the gimbal via UDP SDK (`192.168.144.25:37260`). Supported commands:
+**Step 6 — PTZ / camera control (optional).** The Hub still relays a generic `camera_command` Socket.IO event end-to-end, so a companion script can implement pan/tilt/zoom/record for a PTZ-capable camera and operators can drive it from a custom App Builder widget. The built-in Camera Feed app is view-only; the command vocabulary is:
 
 | Command | Socket.IO Event | Effect |
 |---|---|---|
 | Pan/Tilt | `camera_command` → `{type: "rotate", yawSpeed, pitchSpeed}` | Move gimbal |
 | Center | `camera_command` → `{type: "center"}` | Return to forward position |
 | Nadir | `camera_command` → `{type: "nadir"}` | Point straight down |
-| Zoom | `camera_command` → `{type: "zoom", level}` | Set zoom 1x–6x |
+| Zoom | `camera_command` → `{type: "zoom", level}` | Set zoom level |
 | Photo | `camera_command` → `{type: "photo"}` | Capture still image |
 | Record | `camera_command` → `{type: "recordToggle"}` | Start/stop video recording |
 
@@ -769,7 +764,6 @@ pip3 install requests aiohttp mavsdk dronecan python-socketio python-dotenv
 | `$HOME/caribou/telemetry_forwarder.py` | Telemetry forwarder script |
 | `$HOME/caribou/logs_ota_service.py` | Logs & OTA service script |
 | `$HOME/caribou/camera_stream_service.py` | Camera stream service script |
-| `$HOME/caribou/siyi_camera_controller.py` | SIYI camera controller script |
 | `/var/lib/caribou/fc_logs/` | Local FC log cache (FCLogSyncer) |
 | `/var/log/caribou/*.log` | Application logs |
 | `/etc/systemd/system/caribou-*.service` | Systemd service files |
