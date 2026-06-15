@@ -112,3 +112,7 @@ data/
 
 # Webdev artifacts (checkpoint zips, migrations, etc.)
 .webdev/
+
+# Python bytecode
+__pycache__/
+*.pyc
