@@ -46,7 +46,7 @@ import {
   getLatestDiagnostics,
   getDiagnosticsHistory,
 } from "./logsOtaDb";
-import { storagePut } from "./storage";
+import { storagePut, toPublicUrl } from "./storage";
 import { nanoid } from "nanoid";
 import { gzipSync } from "zlib";
 import { createHash } from "crypto";
@@ -1180,7 +1180,8 @@ export const appRouter = router({
           type: "upload_file",
           payload: {
             fileId,
-            fileUrl: url,
+            // Absolute URL so the companion computer can fetch over the network
+            fileUrl: toPublicUrl(url, ctx.req),
             targetPath: input.targetPath,
             filename: input.filename,
             isCompressed, // Pi needs to decompress if true
@@ -1546,7 +1547,8 @@ export const appRouter = router({
           type: "flash_firmware",
           payload: {
             updateId: input.updateId,
-            firmwareUrl: update.url,
+            // Absolute URL so the companion computer can fetch over the network
+            firmwareUrl: toPublicUrl(update.url, ctx.req),
             filename: update.filename,
             sha256Hash: update.sha256Hash || null,
           },

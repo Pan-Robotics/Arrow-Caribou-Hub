@@ -3,7 +3,6 @@ import express from "express";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -11,6 +10,7 @@ import { serveStatic, setupVite } from "./vite";
 import { initializeWebSocket } from "../websocket";
 import restApiRouter from "../rest-api";
 import { startJobReaper } from "../droneJobsDb";
+import { migrateDb } from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -32,9 +32,12 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  // Open the local SQLite database and apply migrations (creates the DB on first run)
+  await migrateDb();
+
   const app = express();
   const server = createServer(app);
-  
+
   // Initialize WebSocket server
   initializeWebSocket(server);
   // Configure body parser — no practical size limit (FC logs can exceed 200MB)
@@ -42,10 +45,8 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "500mb", extended: true }));
   // Parse raw text bodies (needed for SDP in WHEP proxy)
   app.use(express.text({ type: ["application/sdp", "text/plain"], limit: "1mb" }));
-  // Storage proxy for /manus-storage/ paths
+  // Local file storage served under /files/*
   registerStorageProxy(app);
-  // OAuth callback under /api/oauth/callback
-  registerOAuthRoutes(app);
   // REST API for external integrations
   app.use("/api/rest", restApiRouter);
   // tRPC API

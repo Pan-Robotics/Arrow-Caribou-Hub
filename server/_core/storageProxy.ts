@@ -1,48 +1,58 @@
-import type { Express } from "express";
-import { ENV } from "./env";
+import type { Express, Request, Response } from "express";
+import { createReadStream, existsSync, statSync } from "node:fs";
+import path from "node:path";
+import { storageResolvePath } from "../storage";
 
+/** Content-Type lookup by file extension for locally served storage objects. */
+const CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".md": "text/markdown; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".log": "text/plain; charset=utf-8",
+  ".json": "application/json",
+  ".csv": "text/csv; charset=utf-8",
+};
+
+/**
+ * Serve objects written by server/storage.ts from the local storage root.
+ * Replaces the previous Manus/S3 signed-URL proxy.
+ */
 export function registerStorageProxy(app: Express) {
-  app.get("/manus-storage/*", async (req, res) => {
-    const key = req.params[0];
+  app.get("/files/*", (req: Request, res: Response) => {
+    const key = (req.params as Record<string, string>)[0];
     if (!key) {
       res.status(400).send("Missing storage key");
       return;
     }
 
-    if (!ENV.forgeApiUrl || !ENV.forgeApiKey) {
-      res.status(500).send("Storage proxy not configured");
+    let full: string;
+    try {
+      full = storageResolvePath(key);
+    } catch {
+      res.status(400).send("Invalid storage key");
       return;
     }
 
-    try {
-      const forgeUrl = new URL(
-        "v1/storage/presign/get",
-        ENV.forgeApiUrl.replace(/\/+$/, "") + "/",
-      );
-      forgeUrl.searchParams.set("path", key);
-
-      const forgeResp = await fetch(forgeUrl, {
-        headers: { Authorization: `Bearer ${ENV.forgeApiKey}` },
-      });
-
-      if (!forgeResp.ok) {
-        const body = await forgeResp.text().catch(() => "");
-        console.error(`[StorageProxy] forge error: ${forgeResp.status} ${body}`);
-        res.status(502).send("Storage backend error");
-        return;
-      }
-
-      const { url } = (await forgeResp.json()) as { url: string };
-      if (!url) {
-        res.status(502).send("Empty signed URL from backend");
-        return;
-      }
-
-      res.set("Cache-Control", "no-store");
-      res.redirect(307, url);
-    } catch (err) {
-      console.error("[StorageProxy] failed:", err);
-      res.status(502).send("Storage proxy error");
+    if (!existsSync(full) || !statSync(full).isFile()) {
+      res.status(404).send("Not found");
+      return;
     }
+
+    const ext = path.extname(full).toLowerCase();
+    res.setHeader("Content-Type", CONTENT_TYPES[ext] ?? "application/octet-stream");
+    res.setHeader("Content-Length", statSync(full).size);
+    res.setHeader("Cache-Control", "no-store");
+
+    const stream = createReadStream(full);
+    stream.on("error", () => {
+      if (!res.headersSent) res.status(500).send("Read error");
+      else res.end();
+    });
+    stream.pipe(res);
   });
 }
