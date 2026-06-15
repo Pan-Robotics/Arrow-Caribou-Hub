@@ -73,8 +73,8 @@ else
     read -p "Create forwarder.env now? [Y/n]: " CREATE_ENV
     CREATE_ENV=${CREATE_ENV:-Y}
     if [[ "$CREATE_ENV" =~ ^[Yy] ]]; then
-        read -p "Caribou Hub URL [https://arrowhub-5j6w8bkt.manus.space]: " HUB_URL
-        HUB_URL=${HUB_URL:-"https://arrowhub-5j6w8bkt.manus.space"}
+        read -p "Caribou Hub URL [http://<hub-ip>:3000]: " HUB_URL
+        HUB_URL=${HUB_URL:-"http://<hub-ip>:3000"}
 
         read -p "Drone ID [caribou_001]: " DRONE_ID
         DRONE_ID=${DRONE_ID:-"caribou_001"}

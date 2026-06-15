@@ -21,7 +21,7 @@ The Caribou SDK is a Python-based development toolkit that enables developers to
 
 ### 1.2 Architecture Overview
 
-The Caribou system architecture centers around a companion computer (Raspberry Pi) that acts as the intelligent bridge between the flight controller, payload devices, and the cloud-based Caribou Hub. The companion computer connects to Caribou Hub over wireless/cellular internet for command and control, while locally managing three payload ports (C1, C2, C3) through an integrated network switch that provides both Ethernet and CAN bus connectivity.
+The Caribou system architecture centers around a companion computer (Raspberry Pi) that acts as the intelligent bridge between the flight controller, payload devices, and the Caribou Hub. The companion computer connects to Caribou Hub over wireless/cellular internet for command and control, while locally managing three payload ports (C1, C2, C3) through an integrated network switch that provides both Ethernet and CAN bus connectivity.
 
 **Network Topology:**
 
@@ -67,7 +67,7 @@ Legend:
 
 **Component Roles:**
 
-**Companion Computer** (Raspberry Pi 4/5): Executes Python SDK applications, polls Caribou Hub for jobs, forwards telemetry from flight controller and payloads, manages payload lifecycle (discovery, configuration, data routing). Connects to flight controller via CAN bus for MAVLink telemetry and to Caribou Hub via WiFi or cellular for cloud communication.
+**Companion Computer** (Raspberry Pi 4/5): Executes Python SDK applications, polls Caribou Hub for jobs, forwards telemetry from flight controller and payloads, manages payload lifecycle (discovery, configuration, data routing). Connects to flight controller via CAN bus for MAVLink telemetry and to Caribou Hub via WiFi or cellular (or Tailscale) for Hub communication.
 
 **Integrated Network Switch**: Built into the Caribou drone hardware, this component provides Ethernet switching for three payload ports (C1, C2, C3) and CAN bus interface to the flight controller. Automatically assigns static IPs to payloads (192.168.144.11 for C1, .12 for C2, .13 for C3). Developers do not need to configure or manage this component directly.
 
@@ -75,7 +75,7 @@ Legend:
 
 **Flight Controller** (Pixhawk 6X/32v6, Cube Pilot+): Runs ArduPilot or PX4 autopilot firmware. Provides MAVLink telemetry (attitude, position, GPS, battery) to companion computer via CAN bus. Receives commands from Mission Planner via wireless RF telemetry link. Shares CAN bus with payloads for DroneCAN communication.
 
-**Caribou Hub**: Cloud-hosted web application providing operator interface, job queue management, telemetry visualization, file storage, and REST API for companion computer communication. Accessible from any web browser with internet connectivity.
+**Caribou Hub**: Self-hosted web application (runs locally) providing operator interface, job queue management, telemetry visualization, file storage, and REST API for companion computer communication. Accessible from any web browser with internet connectivity.
 
 **Mission Planner**: Ground control software for flight planning and real-time monitoring. Connects to flight controller via wireless RF telemetry link (typically 915 MHz or 433 MHz radio). Communicates using MAVLink protocol for mission upload, parameter configuration, and live telemetry display.
 
@@ -113,7 +113,7 @@ Before developing with the Caribou SDK, ensure you have the required hardware an
 
 ## 2. Core Components
 
-The Caribou SDK consists of two primary Python applications that run on the companion computer: the Caribou Hub Client for bidirectional job management, and the Telemetry Forwarder for streaming flight data to the cloud. These components work together to provide a complete solution for remote drone management and monitoring.
+The Caribou SDK consists of two primary Python applications that run on the companion computer: the Caribou Hub Client for bidirectional job management, and the Telemetry Forwarder for streaming flight data to the Hub. These components work together to provide a complete solution for remote drone management and monitoring.
 
 ### 2.1 Caribou Hub Client (`raspberry_pi_client.py`)
 
@@ -128,7 +128,7 @@ The Caribou Hub Client implements a polling-based job execution system that enab
 - **Extensible Architecture**: Developers can add custom job handlers for application-specific tasks
 
 **Built-in Job Types**:
-- `upload_file`: Downloads a file from Hub's S3 storage to specified path on companion computer
+- `upload_file`: Downloads a file from Hub's local storage to specified path on companion computer
 - `update_config`: Updates JSON configuration file with new settings from Hub
 - **Custom Job Types**: Developers can implement handlers for restart_service, run_script, collect_logs, etc.
 
@@ -240,25 +240,25 @@ An operator needs to update the companion computer's configuration file without 
 **Steps**:
 1. Operator opens Caribou Hub and navigates to "Drone Management" → "caribou_001" → "Files"
 2. Clicks "Upload File" button, selects `config.json` from local computer
-3. Hub uploads file to S3 storage, generates unique file ID
+3. Hub uploads file to local storage, generates unique file ID
 4. Operator specifies target path: `/home/pi/config/config.json`
 5. Hub creates "upload_file" job in database with payload: `{fileId, targetPath, filename}`
 6. Job status: "pending"
 7. Companion computer's `raspberry_pi_client.py` polls Hub every 5 seconds
 8. Client finds pending job, calls `droneJobs.getPendingJobs` API
 9. Client acknowledges job (status: "in_progress"), calls `droneJobs.acknowledgeJob`
-10. Client downloads file from S3 using presigned URL from `droneJobs.getFile`
+10. Client downloads file from local storage using download URL from `droneJobs.getFile`
 11. Client saves file to `/home/pi/config/config.json`, creates directory if needed
 12. Client reports completion, calls `droneJobs.completeJob` with `success: true`
 13. Operator sees "Completed" status in Hub UI, with timestamp and execution duration
 
 **Data Flow**:
 ```
-Browser → Upload File → S3 Storage
+Browser → Upload File → Local Storage
                     ↓
                 Create Job → Database (status: pending)
                     ↓
-Companion Pi → Poll Jobs → Find pending → Acknowledge → Download from S3
+Companion Pi → Poll Jobs → Find pending → Acknowledge → Download from local storage
                                                       ↓
                                               Save to filesystem
                                                       ↓

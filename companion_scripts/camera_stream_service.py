@@ -28,7 +28,7 @@ Features:
 Usage:
   python3 camera_stream_service.py \\
     --rtsp-url rtsp://192.168.1.100:8554/stream \\
-    --hub-url https://arrowhub-5j6w8bkt.manus.space \\
+    --hub-url http://<hub-ip>:3000 \\
     --drone-id caribou_001 \\
     --api-key <your-api-key>
 
@@ -491,7 +491,7 @@ def parse_args():
     )
     parser.add_argument(
         "--hub-url",
-        help="Caribou Hub server URL (e.g. https://arrowhub-5j6w8bkt.manus.space)",
+        help="Caribou Hub server URL (e.g. http://<hub-ip>:3000)",
     )
     parser.add_argument(
         "--drone-id", default="caribou_001",

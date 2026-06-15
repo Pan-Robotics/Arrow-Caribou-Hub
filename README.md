@@ -29,7 +29,7 @@ The system consists of three tiers: the browser-based frontend, the Node.js serv
 │  └───────────┘  └───────────┘  └───────────┘  └─────────────────┘   │
 │                         │                                            │
 │  ┌──────────────────────┴───────────────────────────────────────┐    │
-│  │  Drizzle ORM → MySQL / TiDB       S3 Object Storage         │    │
+│  │  Drizzle ORM → SQLite (local)      Local File Storage        │    │
 │  └──────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────▲────────────────────────────────────────┘
                               │  REST + Socket.IO
@@ -41,7 +41,7 @@ The system consists of three tiers: the browser-based frontend, the Node.js serv
 │  camera_stream_service.py → POST /api/rest/camera/stream-register    │
 │  logs_ota_service.py → REST + Socket.IO (logs, OTA, diagnostics)     │
 │    ├─ FCLogSyncer: HTTP GET from FC net_webserver (primary)          │
-│    ├─ Multipart upload to Hub S3 (preferred, base64 fallback)        │
+│    ├─ Multipart upload to the Hub's local storage (preferred, base64 fallback)        │
 │    └─ MAVFTP fallback if FC webserver unreachable                    │
 └──────────────────────────────┬───────────────────────────────────────┘
                                │  HTTP (port 8080)
@@ -108,7 +108,7 @@ server/
   db.ts                          ← Core database query helpers
   logsOtaDb.ts                   ← Database helpers for FC logs, firmware, diagnostics
   droneJobsDb.ts                 ← Database helpers for drone job queue
-  storage.ts                     ← S3 file storage helpers
+  storage.ts                     ← Local filesystem storage helpers
 drizzle/
   schema.ts                      ← Database schema (15 tables)
 companion_scripts/
@@ -155,7 +155,7 @@ Post-flight log analysis with a full ArduPilot DataFlash binary parser running i
 
 Four-tab interface for remote flight controller management and companion computer monitoring, powered by the `logs_ota_service.py` companion script:
 
-**FC Logs** — Scan the flight controller's SD card for `.BIN` and `.log` files. The primary data path uses HTTP via the ArduPilot [`net_webserver.lua`](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Scripting/applets/net_webserver.lua) applet running on the FC (port 8080): the `FCLogSyncer` class in `logs_ota_service.py` parses the HTML directory listing at `/mnt/APM/LOGS/`, downloads files to a local cache on the Pi, and uploads them to Hub S3. MAVFTP is retained as a fallback when the FC web server is unreachable. Completed logs can be saved directly to the user's PC via a server-side download proxy (`GET /api/rest/logs/fc-download/:logId`) that streams from S3 with `Content-Disposition: attachment`. For logs still on the FC, the download button dispatches the companion job and auto-triggers the browser download once the upload completes. Completed logs can also be sent directly to the Flight Analytics app for parsing (checks if the app is installed first). The companion script supports both multipart file upload (preferred, no base64 overhead) and base64 JSON upload (backward-compatible fallback). Real-time download progress via WebSocket.
+**FC Logs** — Scan the flight controller's SD card for `.BIN` and `.log` files. The primary data path uses HTTP via the ArduPilot [`net_webserver.lua`](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Scripting/applets/net_webserver.lua) applet running on the FC (port 8080): the `FCLogSyncer` class in `logs_ota_service.py` parses the HTML directory listing at `/mnt/APM/LOGS/`, downloads files to a local cache on the Pi, and uploads them to the Hub's local storage. MAVFTP is retained as a fallback when the FC web server is unreachable. Completed logs can be saved directly to the user's PC via a server-side download proxy (`GET /api/rest/logs/fc-download/:logId`) that streams from local storage with `Content-Disposition: attachment`. For logs still on the FC, the download button dispatches the companion job and auto-triggers the browser download once the upload completes. Completed logs can also be sent directly to the Flight Analytics app for parsing (checks if the app is installed first). The companion script supports both multipart file upload (preferred, no base64 overhead) and base64 JSON upload (backward-compatible fallback). Real-time download progress via WebSocket.
 
 **OTA Updates** — Upload firmware files (`.abin`/`.apj`, max 50 MB) and flash them to the flight controller via MAVFTP. Monitors the ArduPilot firmware rename sequence (`ardupilot.abin` → `ardupilot-verify.abin` → `ardupilot-flash.abin` → `ardupilot-flashed.abin`) with real-time progress. Includes a safety warning dialog before flashing.
 
@@ -169,7 +169,7 @@ Administration panel for managing drones and connectivity. Register drones, gene
 
 ### Mission Planner (Planned)
 
-Autonomous flight mission planning with waypoints. A Google Maps integration component is available in the codebase; the UI shows a placeholder.
+Autonomous flight mission planning with waypoints. A Leaflet/OpenStreetMap map component is available in the codebase (also used by Flight Analytics for the GPS ground track); the UI shows a placeholder.
 
 ---
 
@@ -227,11 +227,11 @@ A polling-based job queue pushes tasks to the companion computer. Jobs follow a 
 
 | Job Type | Description | Handler |
 |---|---|---|
-| `upload_file` | Download a file from S3 to a target path on the Pi | `raspberry_pi_client.py` |
+| `upload_file` | Download a file from local storage to a target path on the Pi | `raspberry_pi_client.py` |
 | `update_config` | Update configuration files | `raspberry_pi_client.py` |
 | `restart_service` | Restart a systemd service | `raspberry_pi_client.py` |
 | `scan_fc_logs` | List FC log files — reads from local cache (instant) or on-demand HTTP listing from FC `net_webserver.lua`, MAVFTP fallback | `logs_ota_service.py` |
-| `download_fc_log` | Download FC log — serves from local cache, or on-demand HTTP download from FC `net_webserver.lua`, MAVFTP fallback; uploads to Hub S3 via multipart (preferred) or base64 | `logs_ota_service.py` |
+| `download_fc_log` | Download FC log — serves from local cache, or on-demand HTTP download from FC `net_webserver.lua`, MAVFTP fallback; uploads to the Hub's local storage via multipart (preferred) or base64 | `logs_ota_service.py` |
 | `flash_firmware` | Flash firmware to FC via MAVFTP with stage monitoring | `logs_ota_service.py` |
 
 ### Relay Configuration
@@ -264,9 +264,9 @@ All ingest endpoints require `api_key` and `drone_id` in the request body.
 | `/api/rest/flightlog/upload` | POST | Upload flight log from Pi |
 | `/api/rest/logs/fc-list` | POST | Report discovered FC log files |
 | `/api/rest/logs/fc-progress` | POST | Update FC log download progress |
-| `/api/rest/logs/fc-upload` | POST | Upload downloaded FC log to S3 (base64) |
-| `/api/rest/logs/fc-upload-multipart` | POST | Upload downloaded FC log to S3 (multipart, preferred) |
-| `/api/rest/logs/fc-download/:logId` | GET | Download proxy — streams FC log from S3 to browser (session auth) |
+| `/api/rest/logs/fc-upload` | POST | Upload downloaded FC log to local storage (base64) |
+| `/api/rest/logs/fc-upload-multipart` | POST | Upload downloaded FC log to local storage (multipart, preferred) |
+| `/api/rest/logs/fc-download/:logId` | GET | Download proxy — streams FC log from local storage to browser (session auth) |
 | `/api/rest/firmware/progress` | POST | Update firmware flash progress |
 | `/api/rest/diagnostics/report` | POST | Submit system diagnostics snapshot |
 | `/api/rest/payload/:appId/ingest` | POST | Receive custom app payload |
@@ -346,7 +346,7 @@ Fifteen tables organized across five domains.
 | Table | Purpose |
 |---|---|
 | **Auth & Users** | |
-| `users` | OAuth user accounts (openId, name, email, role) |
+| `users` | Local operator account (openId, name, email, role) |
 | **Drone Fleet** | |
 | `drones` | Registered drone inventory (droneId, name, lastSeen) |
 | `apiKeys` | Per-drone authentication keys |
@@ -356,7 +356,7 @@ Fifteen tables organized across five domains.
 | `scans` | Point cloud scan metadata |
 | `telemetry` | Flight telemetry snapshots (JSON) |
 | **Flight Logs & OTA** | |
-| `flightLogs` | Uploaded flight log metadata and S3 references |
+| `flightLogs` | Uploaded flight log metadata and local storage references |
 | `fcLogs` | FC SD card log files (discovered, downloading, completed) |
 | `firmwareUpdates` | Firmware uploads and flash status tracking |
 | `systemDiagnostics` | Periodic companion computer health snapshots |

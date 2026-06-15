@@ -30,7 +30,7 @@ A polling-based job queue client that enables two-way communication between the 
 
 | Job Type | Description |
 |---|---|
-| `upload_file` | Download a file from S3 to a target path on the Pi; supports gzip compression for Python files |
+| `upload_file` | Download a file from local storage to a target path on the Pi; supports gzip compression for Python files |
 | `update_config` | Write a JSON configuration object to a specified file path |
 | `restart_service` | Restart a systemd service on the Pi |
 
@@ -143,8 +143,8 @@ A comprehensive companion service that bridges the flight controller and the Hub
 |---|---|
 | FC Log Background Sync | `FCLogSyncer` class runs a 60-second background loop (only when drone is disarmed) that parses the HTML directory listing from `net_webserver.lua` at `/mnt/APM/LOGS/`, compares against a local JSON manifest, and downloads new/changed files using `If-Modified-Since` headers to `/var/lib/caribou/fc_logs/` |
 | FC Log Scan | Three-tier resolution: local cache (instant) → HTTP listing from FC `net_webserver.lua` (primary) → MAVFTP fallback |
-| FC Log Download | Three-tier resolution: local cache → HTTP download from FC `net_webserver.lua` (primary, also caches locally) → MAVFTP fallback. Upload to Hub S3 via multipart form-data (preferred, ~33% faster) with base64 JSON fallback |
-| OTA Firmware Flash | Download firmware from Hub S3, **verify SHA-256 hash**, **extract git hash** from `.abin` header, serve via HTTP for FC pull (Approach C via `firmware_puller.lua`), MAVLink reboot, poll FC webserver, **verify firmware version** via `AUTOPILOT_VERSION` git hash comparison, **clean up temp file** |
+| FC Log Download | Three-tier resolution: local cache → HTTP download from FC `net_webserver.lua` (primary, also caches locally) → MAVFTP fallback. Upload to the Hub's local storage via multipart form-data (preferred, ~33% faster) with base64 JSON fallback |
+| OTA Firmware Flash | Download firmware from the Hub's local storage, **verify SHA-256 hash**, **extract git hash** from `.abin` header, serve via HTTP for FC pull (Approach C via `firmware_puller.lua`), MAVLink reboot, poll FC webserver, **verify firmware version** via `AUTOPILOT_VERSION` git hash comparison, **clean up temp file** |
 | System Diagnostics | Collect CPU, memory, disk, temperature, network, and systemd service status every 10 seconds |
 | Remote Log Streaming | Stream journalctl output from any companion service to the browser in real-time |
 
@@ -154,7 +154,7 @@ A comprehensive companion service that bridges the flight controller and the Hub
 |---|---|---|
 | `scan_fc_logs` | FC Logs tab → "Scan FC Logs" button | Reads from local cache first (instant); on-demand HTTP listing from FC `net_webserver.lua` if cache is stale; MAVFTP fallback if web server unreachable |
 | `download_fc_log` | FC Logs tab → download button on a log row | Serves from local cache first; on-demand HTTP download from FC `net_webserver.lua` (also caches locally); MAVFTP fallback. Uploads via multipart form-data to `fc-upload-multipart` (preferred), falls back to base64 JSON `fc-upload` if unavailable |
-| `flash_firmware` | OTA tab → "Flash to FC" button | Downloads firmware from S3, **verifies SHA-256 hash**, extracts git hash from `.abin` header, serves via HTTP for FC pull (Approach C), sends MAVLink reboot, waits for FC webserver, **verifies firmware version** via `AUTOPILOT_VERSION`, cleans up temp file |
+| `flash_firmware` | OTA tab → "Flash to FC" button | Downloads firmware from local storage, **verifies SHA-256 hash**, extracts git hash from `.abin` header, serves via HTTP for FC pull (Approach C), sends MAVLink reboot, waits for FC webserver, **verifies firmware version** via `AUTOPILOT_VERSION`, cleans up temp file |
 
 ### CLI Arguments
 
@@ -424,7 +424,7 @@ sudo journalctl -u camera-stream -f
 All services follow these security practices:
 
 - **Mutex-locked job acknowledgement:** Both `raspberry_pi_client.py` and `logs_ota_service.py` send a `lockedBy` companion identifier when acknowledging jobs. The server uses an atomic compare-and-swap (only update if status is still `pending`) to prevent double-execution.
-- **SHA-256 artefact integrity:** Firmware uploads are hashed server-side at upload time. The companion verifies the hash after downloading from S3 and before flashing to the flight controller. A mismatch aborts the flash with a `hash_verification_failed` error.
+- **SHA-256 artefact integrity:** Firmware uploads are hashed server-side at upload time. The companion verifies the hash after downloading from local storage and before flashing to the flight controller. A mismatch aborts the flash with a `hash_verification_failed` error.
 - **Artefact cleanup:** Downloaded firmware temp files are deleted in a `finally` block after flash completes or fails, preventing stale artefacts from accumulating on the Pi.
 - **Job timeout reaper:** The Hub server runs a 60-second interval reaper that resets stuck `in_progress` jobs back to `pending` (with retry counting) or marks them as permanently failed after `maxRetries` is exceeded.
 - **Job expiry:** Pending jobs with an `expiresAt` timestamp are automatically expired by the reaper if they are never picked up.

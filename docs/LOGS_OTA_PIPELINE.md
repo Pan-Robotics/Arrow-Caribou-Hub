@@ -1,6 +1,6 @@
 # Logs & OTA Updates Pipeline
 
-**Caribou Hub — Companion Computer to Cloud**
+**Caribou Hub — Companion Computer to Local Hub**
 
 This document describes the full architecture of the Logs & OTA Updates pipeline, covering the companion Python script that runs on the Raspberry Pi, the server-side endpoints and WebSocket handlers on Caribou Hub, the database schema, and the browser-based frontend UI. All components are designed to work together over the internet via Tailscale, with no requirement that the drone and the user's PC share a local network.
 
@@ -8,7 +8,7 @@ This document describes the full architecture of the Logs & OTA Updates pipeline
 
 ## Architecture Overview
 
-The pipeline connects three layers: the **flight controller** (ArduPilot running on a Cube Orange or similar), the **companion computer** (Raspberry Pi 4/5 on the drone), and the **Caribou Hub** cloud server. The companion script bridges the FC and the Hub, while the browser connects directly to the Hub for real-time monitoring and control.
+The pipeline connects three layers: the **flight controller** (ArduPilot running on a Cube Orange or similar), the **companion computer** (Raspberry Pi 4/5 on the drone), and the **Caribou Hub** server. The companion script bridges the FC and the Hub, while the browser connects directly to the Hub for real-time monitoring and control.
 
 ```
 ┌─────────────────────┐  HTTP (8080) + MAVFTP  ┌──────────────────────┐
@@ -29,13 +29,13 @@ The pipeline connects three layers: the **flight controller** (ArduPilot running
                                                              │
                                                   ┌──────────▼───────────┐
                                                   │   Caribou Hub         │
-                                                  │   (Cloud Server)     │
+                                                  │   (Local Server)     │
                                                   │                      │
                                                   │  • tRPC routers      │
                                                   │  • REST endpoints    │
                                                   │  • WebSocket server  │
-                                                  │  • MySQL database    │
-                                                  │  • S3 storage        │
+                                                  │  • SQLite database   │
+                                                  │  • Local file store  │
                                                   └──────────┬───────────┘
                                                              │
                                                         WebSocket
@@ -65,9 +65,9 @@ The user clicks **Scan FC Logs** in the browser. This triggers a tRPC mutation t
 
 The discovered `.BIN` and `.log` files are reported back to the Hub via `POST /api/rest/logs/fc-list`, which upserts them into the `fcLogs` database table.
 
-When the user clicks **Download** on a specific log, a `download_fc_log` job is created. The companion script uses the same three-tier strategy: it first checks the local cache, then attempts an HTTP download from the FC's `net_webserver.lua` (streaming the `.BIN` file via `GET /mnt/APM/LOGS/<filename>` and caching it locally for future access), and falls back to MAVFTP only if the web server is unreachable. It then uploads the file to the Hub. The companion first attempts a multipart upload via `POST /api/rest/logs/fc-upload-multipart` (no base64 overhead, approximately 33% faster), and falls back to the legacy base64 JSON endpoint `POST /api/rest/logs/fc-upload` if the multipart endpoint is unavailable. The Hub stores the file in S3 and updates the `fcLogs` record with the S3 URL. Throughout this process, progress is reported via `POST /api/rest/logs/fc-progress` and broadcast to the browser over WebSocket as `fc_log_progress` events.
+When the user clicks **Download** on a specific log, a `download_fc_log` job is created. The companion script uses the same three-tier strategy: it first checks the local cache, then attempts an HTTP download from the FC's `net_webserver.lua` (streaming the `.BIN` file via `GET /mnt/APM/LOGS/<filename>` and caching it locally for future access), and falls back to MAVFTP only if the web server is unreachable. It then uploads the file to the Hub. The companion first attempts a multipart upload via `POST /api/rest/logs/fc-upload-multipart` (no base64 overhead, approximately 33% faster), and falls back to the legacy base64 JSON endpoint `POST /api/rest/logs/fc-upload` if the multipart endpoint is unavailable. The Hub stores the file in local storage and updates the `fcLogs` record with the local storage URL. Throughout this process, progress is reported via `POST /api/rest/logs/fc-progress` and broadcast to the browser over WebSocket as `fc_log_progress` events.
 
-Once a log reaches `completed` status, the user can save it directly to their local PC via the **Save to PC** button. This triggers a browser download through the server-side download proxy at `GET /api/rest/logs/fc-download/:logId`, which authenticates via session cookie, fetches the file from S3, and streams it to the browser with `Content-Disposition: attachment` for a native Save dialog. For logs still on the FC (status `discovered` or `failed`), the **Download from FC** button dispatches the companion job and automatically triggers the browser download once the upload completes.
+Once a log reaches `completed` status, the user can save it directly to their local PC via the **Save to PC** button. This triggers a browser download through the server-side download proxy at `GET /api/rest/logs/fc-download/:logId`, which authenticates via session cookie, fetches the file from local storage, and streams it to the browser with `Content-Disposition: attachment` for a native Save dialog. For logs still on the FC (status `discovered` or `failed`), the **Download from FC** button dispatches the companion job and automatically triggers the browser download once the upload completes.
 
 | Step | Actor | Endpoint / Protocol | Direction |
 |------|-------|---------------------|-----------|
@@ -85,20 +85,20 @@ Once a log reaches `completed` status, the user can save it directly to their lo
 | Pi downloads from FC (fallback) | Pi | MAVSDK FTP `download` | Pi ← FC |
 | Pi uploads to Hub (multipart) | Pi | `POST /api/rest/logs/fc-upload-multipart` | Pi → Hub |
 | Pi uploads to Hub (base64 fallback) | Pi | `POST /api/rest/logs/fc-upload` | Pi → Hub |
-| Hub stores in S3 | Hub | `storagePut()` | Internal |
+| Hub stores in local storage | Hub | `storagePut()` | Internal |
 | User saves to PC | Browser | `GET /api/rest/logs/fc-download/:logId` | Hub → Browser |
 
 ### 2. OTA Firmware Flash
 
-The user uploads a firmware file (`.abin` or `.apj`, max 50 MB) through the OTA Updates tab. The file is base64-encoded and sent to `trpc.firmware.upload`, which stores it in S3, **computes a SHA-256 hash** of the file content, and creates a `firmwareUpdates` record with status `uploaded` and the hash stored in the `sha256Hash` column. When the user clicks **Flash to FC**, a `flash_firmware` job is created containing the S3 URL and the `sha256Hash` in the job payload.
+The user uploads a firmware file (`.abin` or `.apj`, max 50 MB) through the OTA Updates tab. The file is base64-encoded and sent to `trpc.firmware.upload`, which stores it in local storage, **computes a SHA-256 hash** of the file content, and creates a `firmwareUpdates` record with status `uploaded` and the hash stored in the `sha256Hash` column. When the user clicks **Flash to FC**, a `flash_firmware` job is created containing the local storage URL and the `sha256Hash` in the job payload.
 
-The companion script picks up the job, **acknowledges it with a mutex lock** (sending its companion identifier as `lockedBy` to prevent double-execution), downloads the firmware from S3, **verifies the SHA-256 hash** against the server-provided value (aborting with `hash_verification_failed` if there is a mismatch), and **extracts the git hash** from the `.abin` file header for post-flash verification. After the flash completes (success or failure), the **downloaded temp file is automatically cleaned up** in a `finally` block.
+The companion script picks up the job, **acknowledges it with a mutex lock** (sending its companion identifier as `lockedBy` to prevent double-execution), downloads the firmware from local storage, **verifies the SHA-256 hash** against the server-provided value (aborting with `hash_verification_failed` if there is a mismatch), and **extracts the git hash** from the `.abin` file header for post-flash verification. After the flash completes (success or failure), the **downloaded temp file is automatically cleaned up** in a `finally` block.
 
 The flash uses **Approach C (FC HTTP Pull)** exclusively. The companion starts a temporary `aiohttp` HTTP server on port 8080 that serves the firmware file at `/firmware.abin`. The FC runs `firmware_puller.lua` (a Lua scripting applet enabled via `FWPULL_ENABLE=1`) which polls the companion's HTTP server, downloads the firmware to the SD card as `ardupilot.abin`, and signals completion. The companion monitors the pull via download request activity, with a 30-second early-exit if no FC pull activity is detected (indicating `firmware_puller.lua` is not installed or `FWPULL_ENABLE` is disabled).
 
 | Step | What Happens | Progress |
 |------|-------------|----------|
-| **Step 1: Download** | Companion downloads `.abin` from Hub S3, verifies SHA-256, extracts git hash from header | 0–10% |
+| **Step 1: Download** | Companion downloads `.abin` from the Hub's local storage, verifies SHA-256, extracts git hash from header | 0–10% |
 | **Step 2: Pre-upload cleanup** | HTTP check for existing `ardupilot*.abin` on FC (via `net_webserver.lua`) | 10–15% |
 | **Step 3: Serve firmware** | Companion starts aiohttp server on port 8080, FC pulls firmware via `firmware_puller.lua` | 15–60% |
 | **Step 4: MAVLink reboot** | Companion sends MAVLink reboot command to FC | 60–65% |
@@ -156,15 +156,15 @@ Three tables support the pipeline, all defined in `drizzle/schema.ts`:
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | `int` (PK, auto) | Surrogate key |
-| `droneId` | `varchar(64)` | Drone identifier |
-| `remotePath` | `varchar(512)` | Path on FC SD card (e.g., `/APM/LOGS/00000042.BIN`) |
-| `filename` | `varchar(255)` | Original filename |
+| `droneId` | `text` | Drone identifier |
+| `remotePath` | `text` | Path on FC SD card (e.g., `/APM/LOGS/00000042.BIN`) |
+| `filename` | `text` | Original filename |
 | `fileSize` | `int` | File size in bytes |
 | `status` | `enum` | `discovered` → `downloading` → `uploading` → `completed` / `failed` |
 | `progress` | `int` | Download progress (0–100) |
-| `storageKey` | `varchar(512)` | S3 storage key |
-| `url` | `varchar(1024)` | Public S3 URL |
-| `sha256Hash` | `varchar(128)` | SHA-256 hash of log file |
+| `storageKey` | `text` | local storage key |
+| `url` | `text` | Public local storage URL |
+| `sha256Hash` | `text` | SHA-256 hash of log file |
 | `errorMessage` | `text` | Error details if failed |
 | `discoveredAt` | `timestamp` | When the log was first seen |
 | `downloadedAt` | `timestamp` | When download completed |
@@ -174,20 +174,20 @@ Three tables support the pipeline, all defined in `drizzle/schema.ts`:
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | `int` (PK, auto) | Surrogate key |
-| `droneId` | `varchar(64)` | Target drone |
-| `filename` | `varchar(255)` | Firmware filename (e.g., `arducopter.abin`) |
+| `droneId` | `text` | Target drone |
+| `filename` | `text` | Firmware filename (e.g., `arducopter.abin`) |
 | `fileSize` | `int` | File size in bytes |
-| `storageKey` | `varchar(512)` | S3 storage key |
-| `url` | `varchar(1024)` | S3 download URL |
+| `storageKey` | `text` | local storage key |
+| `url` | `text` | local storage download URL |
 | `status` | `enum` | `uploaded` → `queued` → `transferring` → `flashing` → `verifying` → `completed` / `failed` |
-| `flashStage` | `varchar(64)` | Current flash stage (e.g., `downloading`, `serving`, `rebooting`, `waiting_for_fc`, `verifying_version`, `reboot_verified`) |
+| `flashStage` | `text` | Current flash stage (e.g., `downloading`, `serving`, `rebooting`, `waiting_for_fc`, `verifying_version`, `reboot_verified`) |
 | `progress` | `int` | Flash progress (0–100) |
 | `errorMessage` | `text` | Error details if failed |
 | `initiatedBy` | `int` | User ID who uploaded |
 | `createdAt` | `timestamp` | Upload time |
 | `startedAt` | `timestamp` | Flash start time |
-| `sha256Hash` | `varchar(128)` | SHA-256 hash of firmware file (computed at upload, verified before flash) |
-| `firmwareVersion` | `varchar(128)` | Confirmed firmware version after flash (e.g., git hash from `AUTOPILOT_VERSION`) |
+| `sha256Hash` | `text` | SHA-256 hash of firmware file (computed at upload, verified before flash) |
+| `firmwareVersion` | `text` | Confirmed firmware version after flash (e.g., git hash from `AUTOPILOT_VERSION`) |
 | `completedAt` | `timestamp` | Flash completion time |
 
 **`droneJobs`** — The job queue table now includes reliability columns:
@@ -197,7 +197,7 @@ Three tables support the pipeline, all defined in `drizzle/schema.ts`:
 | `retryCount` | `int` (default 0) | Number of times this job has been retried |
 | `maxRetries` | `int` (default 3) | Maximum retry attempts before permanent failure |
 | `expiresAt` | `timestamp` (nullable) | Job expiry time — pending jobs past this time are marked expired |
-| `lockedBy` | `varchar(128)` (nullable) | Companion identifier that holds the mutex lock |
+| `lockedBy` | `text` (nullable) | Companion identifier that holds the mutex lock |
 | `lockedAt` | `timestamp` (nullable) | When the lock was acquired |
 | `timeoutSeconds` | `int` (default varies) | Maximum execution time before the reaper resets the job |
 
@@ -206,7 +206,7 @@ Three tables support the pipeline, all defined in `drizzle/schema.ts`:
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | `int` (PK, auto) | Surrogate key |
-| `droneId` | `varchar(64)` | Companion identifier |
+| `droneId` | `text` | Companion identifier |
 | `cpuPercent` | `int` | CPU usage % |
 | `memoryPercent` | `int` | Memory usage % |
 | `diskPercent` | `int` | Disk usage % |
@@ -224,9 +224,9 @@ These endpoints are used by the companion script (not the browser). All require 
 |----------|--------|---------|
 | `/api/rest/logs/fc-list` | POST | Report discovered FC log files (upserts into `fcLogs`) |
 | `/api/rest/logs/fc-progress` | POST | Update download progress for an FC log |
-| `/api/rest/logs/fc-upload` | POST | Upload downloaded FC log content (base64) to S3 |
+| `/api/rest/logs/fc-upload` | POST | Upload downloaded FC log content (base64) to local storage |
 | `/api/rest/logs/fc-upload-multipart` | POST | Upload downloaded FC log file (multipart/form-data, preferred) |
-| `/api/rest/logs/fc-download/:logId` | GET | Download proxy — streams FC log from S3 to browser (session cookie auth) |
+| `/api/rest/logs/fc-download/:logId` | GET | Download proxy — streams FC log from local storage to browser (session cookie auth) |
 | `/api/rest/firmware/progress` | POST | Update firmware flash progress and stage |
 | `/api/rest/diagnostics/report` | POST | Submit a system diagnostics snapshot |
 
@@ -241,10 +241,10 @@ These are used by the browser frontend. All require authentication (`protectedPr
 | `fcLogs` | `requestScan` | Mutation | Create a `scan_fc_logs` job |
 | `fcLogs` | `requestDownload` | Mutation | Create a `download_fc_log` job |
 | `fcLogs` | `delete` | Mutation | Delete an FC log record |
-| `fcLogs` | `sendToAnalytics` | Mutation | Create a flightLogs record from a completed FC log (reuses S3 URL) |
+| `fcLogs` | `sendToAnalytics` | Mutation | Create a flightLogs record from a completed FC log (reuses local storage URL) |
 | `firmware` | `list` | Query | List firmware updates for a drone |
 | `firmware` | `get` | Query | Get a single firmware update |
-| `firmware` | `upload` | Mutation | Upload firmware file (base64) to S3 |
+| `firmware` | `upload` | Mutation | Upload firmware file (base64) to local storage |
 | `firmware` | `requestFlash` | Mutation | Create a `flash_firmware` job |
 | `firmware` | `delete` | Mutation | Delete a firmware update record |
 | `firmware` | `clearFailed` | Mutation | Remove all failed and stuck firmware update records |
@@ -278,7 +278,7 @@ The companion script is a single-file Python 3 asyncio application (~1900 lines)
 
 **`FCLogSyncer`** is a background syncer that downloads FC log files from the ArduPilot [`net_webserver.lua`](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Scripting/applets/net_webserver.lua) applet over HTTP and stores them locally on the companion computer at `/var/lib/caribou/fc_logs/`. The `net_webserver.lua` script is a Lua scripting applet that runs inside ArduPilot on boards with networking support (e.g., Cube Orange with Ethernet). It serves the FC's SD card over HTTP on port 8080 (configurable via the `WEB_BIND_PORT` parameter), providing an HTML directory listing at `/mnt/APM/LOGS/` and direct file downloads at `/mnt/APM/LOGS/<filename>`. The syncer runs a 60-second background loop (only when the drone is **disarmed**, verified via MAVSDK telemetry) that parses the HTML directory listing, compares against a local JSON manifest, and downloads new or changed files using `If-Modified-Since` headers for incremental sync. This approach avoids blocking the MAVLink TCP connection (which MAVFTP does) and provides fast local access for the dashboard. The default FC web server URL is `http://192.168.144.10:8080`, configurable via the `--fc-webserver-url` CLI argument.
 
-**`LogsOtaJobHandler`** implements the three job types using a three-tier resolution strategy for log operations (local cache → HTTP via `net_webserver.lua` → MAVFTP fallback): `handle_scan_fc_logs()` reads from the local manifest first, then issues an on-demand HTTP listing, falling back to MAVFTP; `handle_download_fc_log()` serves from the local cache first, then streams via HTTP (also caching locally), falling back to MAVFTP, and uploads to the Hub via multipart form-data (preferred, no base64 overhead) with automatic fallback to base64 JSON; `handle_flash_firmware()` downloads firmware from S3, **verifies the SHA-256 hash**, **extracts the git hash** from the `.abin` header, serves the firmware via a temporary `aiohttp` HTTP server for the FC to pull (Approach C), sends a MAVLink reboot command, waits for the FC web server to come back online, then **queries `AUTOPILOT_VERSION`** via MAVSDK to compare the `flight_custom_version` git hash against the expected value from the `.abin` header. The confirmed firmware version (or mismatch warning) is reported to the Hub. The **temp file is cleaned up** in a `finally` block.
+**`LogsOtaJobHandler`** implements the three job types using a three-tier resolution strategy for log operations (local cache → HTTP via `net_webserver.lua` → MAVFTP fallback): `handle_scan_fc_logs()` reads from the local manifest first, then issues an on-demand HTTP listing, falling back to MAVFTP; `handle_download_fc_log()` serves from the local cache first, then streams via HTTP (also caching locally), falling back to MAVFTP, and uploads to the Hub via multipart form-data (preferred, no base64 overhead) with automatic fallback to base64 JSON; `handle_flash_firmware()` downloads firmware from local storage, **verifies the SHA-256 hash**, **extracts the git hash** from the `.abin` header, serves the firmware via a temporary `aiohttp` HTTP server for the FC to pull (Approach C), sends a MAVLink reboot command, waits for the FC web server to come back online, then **queries `AUTOPILOT_VERSION`** via MAVSDK to compare the `flight_custom_version` git hash against the expected value from the `.abin` header. The confirmed firmware version (or mismatch warning) is reported to the Hub. The **temp file is cleaned up** in a `finally` block.
 
 **`DiagnosticsCollector`** gathers system health metrics using `psutil` (CPU, memory, disk, temperature, network) and checks the status of monitored systemd services (`telemetry-forwarder`, `logs-ota`, `camera-stream`, `caribou-hub-client`, `go2rtc`, `tailscale-funnel`) via `systemctl is-active`.
 
@@ -314,7 +314,7 @@ pip install --break-system-packages mavsdk requests psutil python-socketio[async
 
 The frontend is a single React component (~950 lines) with four tabs, each implemented as a sub-component:
 
-**FC Logs Tab** displays a table of discovered log files with columns for filename, remote path, file size, status, and actions. The "Scan FC Logs" button triggers a scan job. Each log row shows contextual action buttons depending on status: for `discovered` or `failed` logs, a **Download from FC** button dispatches the companion download job and automatically triggers a browser save-to-PC download when the upload completes; for `downloading`/`uploading` logs, a spinner with progress indication; for `completed` logs, a blue **Save to PC** button that streams the file from S3 through the server-side download proxy (`GET /api/rest/logs/fc-download/:logId`) with `Content-Disposition: attachment` for a native browser Save dialog, plus a **Send to Flight Analytics** button. The Send to Flight Analytics button checks whether the Flight Analytics app is installed — if not, a toast prompts the user to install it from the App Store first. If installed, it creates a `flightLogs` record reusing the same S3 URL (zero re-upload), so the log appears immediately in Flight Analytics for parsing. Real-time progress updates arrive via Socket.IO `fc_log_progress` events.
+**FC Logs Tab** displays a table of discovered log files with columns for filename, remote path, file size, status, and actions. The "Scan FC Logs" button triggers a scan job. Each log row shows contextual action buttons depending on status: for `discovered` or `failed` logs, a **Download from FC** button dispatches the companion download job and automatically triggers a browser save-to-PC download when the upload completes; for `downloading`/`uploading` logs, a spinner with progress indication; for `completed` logs, a blue **Save to PC** button that streams the file from local storage through the server-side download proxy (`GET /api/rest/logs/fc-download/:logId`) with `Content-Disposition: attachment` for a native browser Save dialog, plus a **Send to Flight Analytics** button. The Send to Flight Analytics button checks whether the Flight Analytics app is installed — if not, a toast prompts the user to install it from the App Store first. If installed, it creates a `flightLogs` record reusing the same local storage URL (zero re-upload), so the log appears immediately in Flight Analytics for parsing. Real-time progress updates arrive via Socket.IO `fc_log_progress` events.
 
 **OTA Updates Tab** shows a table of firmware uploads with status badges reflecting the flash pipeline stages. An "Upload Firmware" dialog accepts `.abin` or `.apj` files (max 50 MB) and includes a safety warning about the risks of OTA firmware updates. The "Flash to FC" button initiates the flash job. Progress is shown via a progress bar that updates in real-time through `firmware_progress` WebSocket events.
 

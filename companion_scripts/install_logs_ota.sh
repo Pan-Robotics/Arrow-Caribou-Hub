@@ -6,7 +6,7 @@
 #
 # This service provides:
 #   - FC log sync via ArduPilot net_webserver HTTP (fast, no MAVLink blocking)
-#   - FC log download from local cache → Hub S3 → user's browser
+#   - FC log download from local cache → the Hub → user's browser
 #   - OTA firmware upload to FC via MAVFTP with SHA-256 integrity verification
 #   - System diagnostics reporting (CPU, memory, disk, temp, services)
 #   - Remote log streaming (journalctl → browser)
@@ -96,7 +96,7 @@ fi
 # ── Configuration defaults ──────────────────────────────────────────────────
 DEFAULT_INSTALL_DIR="/home/$(logname 2>/dev/null || echo 'pi')/companion_scripts"
 DEFAULT_SERVICE_USER="$(logname 2>/dev/null || echo 'pi')"
-DEFAULT_HUB_URL="https://rplidar-viz-cjlhozxe.manus.space"
+DEFAULT_HUB_URL="http://<hub-ip>:3000"
 DEFAULT_DRONE_ID="caribou_001"
 DEFAULT_FC_WEBSERVER_URL="http://192.168.144.10:8080"
 DEFAULT_LOG_STORE_DIR="/var/lib/caribou/fc_logs"

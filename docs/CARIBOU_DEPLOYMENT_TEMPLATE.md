@@ -34,7 +34,7 @@ from datetime import datetime
 # ============================================================================
 
 # Your Caribou Hub endpoint (replace with your actual hub URL)
-CARIBOU_HUB_URL = os.getenv("CARIBOU_HUB_URL", "https://your-caribou-hub.manus.space")
+CARIBOU_HUB_URL = os.getenv("CARIBOU_HUB_URL", "http://<hub-ip>:3000")
 APP_ID = os.getenv("APP_ID", "your-app-id")  # Your custom app ID from Caribou Hub
 
 # Parser metadata
@@ -201,7 +201,7 @@ if __name__ == "__main__":
 3. Implement your custom `parse_payload()` function
 4. Set environment variables:
    ```bash
-   export CARIBOU_HUB_URL="https://your-hub.manus.space"
+   export CARIBOU_HUB_URL="http://<hub-ip>:3000"
    export APP_ID="your-app-id"
    export PORT=5000
    ```
@@ -238,7 +238,7 @@ After=network.target
 Type=simple
 User=caribou
 WorkingDirectory=/home/caribou/parser
-Environment="CARIBOU_HUB_URL=https://your-hub.manus.space"
+Environment="CARIBOU_HUB_URL=http://<hub-ip>:3000"
 Environment="APP_ID=your-app-id"
 Environment="PORT=5000"
 ExecStart=/usr/bin/python3 /home/caribou/parser/parser_service.py
@@ -285,7 +285,7 @@ http://<caribou-device-ip>:5000/ingest
          ▼
 ┌─────────────────┐
 │   Caribou Hub    │
-│  (Manus Cloud)  │
+│  (Local Server) │
 │  WebSocket ───► │ Real-time UI
 └─────────────────┘
 ```

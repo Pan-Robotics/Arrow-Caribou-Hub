@@ -589,7 +589,7 @@ The system generates multiple log files in standard formats:
 
 #### Log Management
 
-The companion computer's log management service monitors disk usage and automatically rotates or compresses old logs to prevent storage exhaustion. Logs can be downloaded via the web interface or synced to cloud storage (S3, Google Drive) when internet connectivity is available.
+The companion computer's log management service monitors disk usage and automatically rotates or compresses old logs to prevent storage exhaustion. Logs can be downloaded via the web interface or uploaded to the Hub's local storage when it is reachable.
 
 ---
 

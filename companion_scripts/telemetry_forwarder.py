@@ -19,7 +19,7 @@ Usage:
     python3 telemetry_forwarder.py [--debug]
 
 Environment Variables:
-    WEB_SERVER_URL - Caribou Hub base URL (e.g., https://arrowhub-5j6w8bkt.manus.space)
+    WEB_SERVER_URL - Caribou Hub base URL (e.g., http://<hub-ip>:3000)
     API_KEY - API key for authentication
     DRONE_ID - Drone identifier (default: caribou_001)
     MAVLINK_URL - MAVLink connection URL (default: udpin://0.0.0.0:14540)
@@ -44,7 +44,7 @@ import dronecan
 from dronecan.driver.socketcan import SocketCAN
 
 # Configuration from environment
-WEB_SERVER_URL = os.getenv('WEB_SERVER_URL', 'https://arrowhub-5j6w8bkt.manus.space')
+WEB_SERVER_URL = os.getenv('WEB_SERVER_URL', 'http://<hub-ip>:3000')
 API_KEY = os.getenv('API_KEY', '')
 DRONE_ID = os.getenv('DRONE_ID', 'caribou_001')
 MAVLINK_URL = os.getenv('MAVLINK_URL', 'udpin://0.0.0.0:14540')

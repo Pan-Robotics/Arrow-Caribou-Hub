@@ -14,7 +14,7 @@ graph LR
 
     subgraph Hub["Caribou Hub Server"]
         REST[POST /api/rest/telemetry/ingest]
-        DB[(MySQL<br>telemetry table)]
+        DB[(SQLite<br>telemetry table)]
         WS[Socket.IO<br>broadcastTelemetry]
     end
 

@@ -89,7 +89,7 @@ All configuration is via environment variables, loaded from `/home/caribou/carib
 
 | Variable | Default | Description |
 |---|---|---|
-| `WEB_SERVER_URL` | `https://arrowhub-5j6w8bkt.manus.space` | Caribou Hub base URL |
+| `WEB_SERVER_URL` | `http://<hub-ip>:3000` | Caribou Hub base URL |
 | `API_KEY` | (required) | Per-drone API key for authentication |
 | `DRONE_ID` | `caribou_001` | Unique drone identifier |
 | `MAVLINK_URL` | `udpin://0.0.0.0:14540` | MAVSDK connection string |
@@ -174,7 +174,7 @@ The server-side handler in `server/rest-api.ts` performs the following steps:
 1. **Validate required fields** — `api_key`, `drone_id`, `timestamp`, `telemetry` must all be present.
 2. **Authenticate** — The API key is validated against the `apiKeys` database table. The key must be associated with the specified `drone_id`.
 3. **Update drone status** — The drone's `lastSeen` timestamp and `isActive` flag are updated.
-4. **Store in database** — The full telemetry JSON is stored in the `telemetry` MySQL table (columns: `id`, `droneId`, `timestamp`, `telemetryData` as JSON, `createdAt`).
+4. **Store in database** — The full telemetry JSON is stored in the `telemetry` SQLite table (columns: `id`, `droneId`, `timestamp`, `telemetryData` as JSON, `createdAt`).
 5. **Broadcast via WebSocket** — The payload is emitted to all Socket.IO clients subscribed to the drone's room.
 
 ### WebSocket Broadcasting
@@ -193,7 +193,7 @@ Additionally, a lightweight `telemetry_update` event (containing only `drone_id`
 ```sql
 CREATE TABLE telemetry (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    droneId VARCHAR(64) NOT NULL,
+    droneId TEXT NOT NULL,
     timestamp TIMESTAMP NOT NULL,
     telemetryData JSON NOT NULL,
     createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -316,7 +316,7 @@ When no live telemetry is connected, the TelemetryApp generates realistic demo d
 │                                                                     │
 │  POST /api/rest/telemetry/ingest                                    │
 │  ├── Validate API key + drone ID                                    │
-│  ├── Store in MySQL (telemetry table, JSON column)                  │
+│  ├── Store in SQLite (telemetry table, JSON column)                  │
 │  └── broadcastTelemetry() → Socket.IO rooms                        │
 └─────────────────────────────────────────────────────────────────────┘
                               │

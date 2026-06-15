@@ -44,7 +44,7 @@ Web server with API endpoints from every Caribou unit and "App Store" interface
 1. Flight Controller → Battery (UAVCAN) → Companion Computer (4G HTTP POST) → Caribou Hub → Display
 2. RPLidar → Raspberry Pi → Attachment Interface (Ethernet TCP/UDP) → Companion Computer (HTTP POST) → Web Portal → Live Visualization
 
-**Current Implementation:** https://rplidar-viz-cjlhozxe.manus.space/
+**Current Implementation:** Caribou Hub runs locally (`pnpm dev` → `http://localhost:3000`).
 
 #### 4. Companion Computer Command Center
 - Triggers programs using MAVSDK communication

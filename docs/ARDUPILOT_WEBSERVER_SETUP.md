@@ -151,7 +151,7 @@ The `logs_ota_service.py` script accepts two CLI arguments for configuring the F
 
 ```bash
 python3 logs_ota_service.py \
-    --hub-url https://your-hub.manus.space \
+    --hub-url http://<hub-ip>:3000 \
     --drone-id caribou_001 \
     --api-key YOUR_API_KEY \
     --fc-connection serial:///dev/ttyAMA1:921600 \

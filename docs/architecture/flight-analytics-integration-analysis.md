@@ -49,14 +49,14 @@ The Caribou Hub already has infrastructure that directly maps to many Flight-Log
 
 | Caribou Hub Component | Relevant Capability |
 |---|---|
-| **S3 Storage** (`storagePut` / `storageGet`) | File upload/download for logs, plots, videos |
-| **Manus OAuth** (built-in) | User authentication (replaces GitHub OAuth) |
-| **MySQL/TiDB** (Drizzle ORM) | Session/analysis storage (replaces SQLite) |
+| **Local file storage** (`storagePut` / `storageGet`) | File upload/download for logs, plots, videos |
+| **Local operator** (no login) | User context (replaces the original's GitHub OAuth) |
+| **SQLite** (better-sqlite3, Drizzle ORM) | Metadata/analysis storage (same engine the original uses) |
 | **tRPC Procedures** | API layer for upload, parse, query (replaces Flask routes) |
 | **REST API** (`/api/rest/*`) | External ingest endpoints for Pi-uploaded logs |
 | **WebSocket** (`broadcastAppData`) | Real-time progress updates (replaces polling `/progress`) |
 | **Drone Management** (drones table, API keys) | Per-drone log association |
-| **DroneFiles table** | File metadata tracking with S3 references |
+| **DroneFiles table** | File metadata tracking with local storage references |
 | **DroneJobs table** | Job queue for async processing |
 | **App Framework** (built-in app system) | Flight Analytics is already registered as a built-in app |
 | **React + shadcn/ui + Tailwind** | Frontend (replaces Bootstrap + Jinja templates) |
@@ -89,7 +89,7 @@ The original uses server-side matplotlib to generate static PNG images. For the 
 
 **Option A: Server-side plot generation (higher reuse, simpler)**
 
-Port the matplotlib logic to a server-side charting library (e.g., run Python matplotlib via a child process, or use a Node.js charting library like `chartjs-node-canvas`). Upload generated PNGs to S3. This preserves the original plot layouts almost exactly.
+Port the matplotlib logic to a server-side charting library (e.g., run Python matplotlib via a child process, or use a Node.js charting library like `chartjs-node-canvas`). Upload generated PNGs to local storage. This preserves the original plot layouts almost exactly.
 
 **Option B: Client-side interactive charts (lower reuse, better UX)**
 
@@ -100,7 +100,7 @@ Use Chart.js or Recharts in the React frontend to render interactive, zoomable c
 | Reuse of original plot code | ~80% (layout, colors, labels) | ~40% (data mapping only) |
 | User experience | Static images, same as original | Interactive, zoomable, modern |
 | Performance | Server CPU for rendering | Client-side, no server load |
-| Storage | S3 for each plot image | No storage needed |
+| Storage | local storage for each plot image | No storage needed |
 | Implementation effort | Medium | Medium-High |
 | Fits Caribou Hub design | Adequate | Excellent |
 
@@ -111,16 +111,16 @@ Use Chart.js or Recharts in the React frontend to render interactive, zoomable c
 | Original Feature | Caribou Hub Equivalent | Status |
 |---|---|---|
 | Flask file upload | tRPC procedure + `storagePut` | **Already exists** |
-| Local filesystem storage | S3 via `storagePut` / `storageGet` | **Already exists** |
-| `UPLOAD_FOLDER` / `PLOT_FOLDER` | S3 keys like `flight-logs/{droneId}/{filename}` | **Map to S3** |
-| Serve uploaded files | S3 public URLs | **Already exists** |
-| Serve plot images | S3 URLs or client-rendered | **Already exists** |
+| Local filesystem storage | local storage via `storagePut` / `storageGet` | **Already exists** |
+| `UPLOAD_FOLDER` / `PLOT_FOLDER` | local storage keys like `flight-logs/{droneId}/{filename}` | **Map to local storage** |
+| Serve uploaded files | local storage public URLs | **Already exists** |
+| Serve plot images | local storage URLs or client-rendered | **Already exists** |
 
 **Estimated reuse: 0% code, 100% capability** — No original code needed; Hub infrastructure handles it all.
 
 ### 4.4 Authentication — Fully Replaced
 
-The original uses GitHub OAuth with Flask-Login and SQLite user storage. The Caribou Hub has Manus OAuth with JWT sessions and MySQL user storage. **No code from the original is needed.**
+The original uses GitHub OAuth with Flask-Login and SQLite user storage. The Caribou Hub uses a single local operator (no login) and SQLite. **No code from the original is needed.**
 
 ### 4.5 Session/Analysis Management — Needs New Schema (~30% conceptual reuse)
 
@@ -130,12 +130,12 @@ The original stores sessions in SQLite with columns: `user_id`, `log_file`, `mar
 flightAnalyses table (new):
   id              INT AUTO_INCREMENT PRIMARY KEY
   userId          INT NOT NULL (FK → users.id)
-  droneId         VARCHAR(64) (FK → drones.droneId)
-  title           VARCHAR(255)
-  logFileUrl      VARCHAR(1024) — S3 URL
-  logFileKey      VARCHAR(512) — S3 key
-  markdownUrl     VARCHAR(1024) — S3 URL (optional)
-  markdownKey     VARCHAR(512) — S3 key (optional)
+  droneId         TEXT (FK → drones.droneId)
+  title           TEXT
+  logFileUrl      TEXT — local storage URL
+  logFileKey      TEXT — local storage key
+  markdownUrl     TEXT — local storage URL (optional)
+  markdownKey     TEXT — local storage key (optional)
   parsedData      JSON — full parsed log data for chart rendering
   plotSummary     JSON — metadata about which plots are available
   anonymized      BOOLEAN DEFAULT false
@@ -147,9 +147,9 @@ flightAnalysisMedia table (new):
   id              INT AUTO_INCREMENT PRIMARY KEY
   analysisId      INT NOT NULL (FK → flightAnalyses.id)
   type            ENUM('video','image','document')
-  filename        VARCHAR(255)
-  url             VARCHAR(1024) — S3 URL
-  storageKey      VARCHAR(512) — S3 key
+  filename        TEXT
+  url             TEXT — local storage URL
+  storageKey      TEXT — local storage key
   fileSize        INT
   createdAt       TIMESTAMP
 ```
@@ -174,7 +174,7 @@ The original uses a global variable polled via `/progress` endpoint. The Caribou
 
 ### 4.9 Video Playback — Needs New UI Component
 
-The original simply links to uploaded video files. The Caribou Hub can store videos in S3 and render them with HTML5 `<video>` tags in the React frontend. A simple video gallery component is needed.
+The original simply links to uploaded video files. The Caribou Hub can store videos in local storage and render them with HTML5 `<video>` tags in the React frontend. A simple video gallery component is needed.
 
 ---
 
@@ -186,7 +186,7 @@ The original simply links to uploaded video files. The Caribou Hub can store vid
 | GPS Anonymizer | ~40 lines | **95%** | Very Low | P1 |
 | Plot Data Mapping | ~140 lines | **60%** | Medium | **P0 — Core** |
 | Plot Rendering (matplotlib) | ~140 lines | **0–40%** | Replaced by Chart.js/Recharts | P0 |
-| File Upload Routes | ~60 lines | **0%** | Replaced by tRPC + S3 | P0 |
+| File Upload Routes | ~60 lines | **0%** | Replaced by tRPC + local storage | P0 |
 | Session Management | ~30 lines | **30%** | New Drizzle schema | P0 |
 | Authentication | ~40 lines | **0%** | Already exists | N/A |
 | Progress Tracking | ~15 lines | **0%** | Replaced by WebSocket | P1 |
@@ -215,7 +215,7 @@ The original simply links to uploaded video files. The Caribou Hub can store vid
 │         │                   │                                   │
 │         ▼                   ▼                                   │
 │  ┌──────────────┐    ┌──────────────┐                          │
-│  │  S3 Storage  │    │   Database   │                          │
+│  │  File Store   │    │   Database   │                          │
 │  │              │    │              │                          │
 │  │  Log files   │    │  flightAna-  │                          │
 │  │  Videos      │    │  lyses table │                          │
@@ -233,7 +233,7 @@ The original simply links to uploaded video files. The Caribou Hub can store vid
 │  │  analytics.upload    — Upload log + attachments           │  │
 │  │  analytics.list      — List analyses for drone/user       │  │
 │  │  analytics.get       — Get full parsed data for charts    │  │
-│  │  analytics.delete    — Remove analysis + S3 files         │  │
+│  │  analytics.delete    — Remove analysis + local storage files         │  │
 │  │  analytics.anonymize — Re-process with GPS anonymization  │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                 │
@@ -274,7 +274,7 @@ Uploaded log files and videos can be tracked in the existing `droneFiles` table 
 | Phase | Scope | Depends On | Estimated Effort |
 |---|---|---|---|
 | **Phase 1: Schema & Parser** | New DB tables, TypeScript log parser ported from Python, GPS anonymizer | Nothing | 1 session |
-| **Phase 2: Upload & Storage** | tRPC upload procedure, S3 storage for logs/markdown/videos, analysis creation | Phase 1 |  1 session |
+| **Phase 2: Upload & Storage** | tRPC upload procedure, local storage for logs/markdown/videos, analysis creation | Phase 1 |  1 session |
 | **Phase 3: Chart Rendering** | 11 interactive chart types in React (Recharts), tabbed analysis view | Phase 1 | 1–2 sessions |
 | **Phase 4: Analysis Management** | List/view/delete analyses, drone selector, analysis history table | Phase 2 | 1 session |
 | **Phase 5: REST API Ingest** | Pi-side log upload endpoint, auto-analysis trigger | Phase 2 | 1 session |
@@ -290,7 +290,7 @@ Uploaded log files and videos can be tracked in the existing `droneFiles` table 
 
 3. **Auto-upload from Pi:** Should the companion computer automatically upload flight logs after each flight, or should this remain a manual process?
 
-4. **Parsed data storage:** Store the full parsed data as JSON in the database (fast retrieval, ~1–5MB per log) or re-parse from S3 on each view (slower, less storage)?
+4. **Parsed data storage:** Store the full parsed data as JSON in the database (fast retrieval, ~1–5MB per log) or re-parse from local storage on each view (slower, less storage)?
 
 5. **Cross-app telemetry overlay:** Should the Flight Analytics charts be able to overlay real-time telemetry data from the `telemetry` table for the same time window?
 
@@ -300,4 +300,4 @@ Uploaded log files and videos can be tracked in the existing `droneFiles` table 
 
 Approximately **40–50% of the Flight-Log-Analyser's functional logic** can be ported to the Caribou Hub with minimal changes. The core log parser (~130 lines) and GPS anonymizer (~40 lines) translate almost line-for-line from Python to TypeScript. The plot data mapping (~140 lines of field-to-chart configuration) informs the client-side chart setup. The remaining application infrastructure (auth, storage, routing, templates, progress tracking) is entirely replaced by the Caribou Hub's existing systems, which are more capable in every dimension.
 
-The most significant upgrade over the original tool is the shift from static matplotlib PNGs to **interactive, zoomable charts** in the browser, combined with **per-drone association**, **API key–authenticated auto-upload from the Pi**, and **session history with S3-backed storage**. The Caribou Hub's WebSocket infrastructure also enables real-time parsing progress updates, replacing the original's polling mechanism.
+The most significant upgrade over the original tool is the shift from static matplotlib PNGs to **interactive, zoomable charts** in the browser, combined with **per-drone association**, **API key–authenticated auto-upload from the Pi**, and **session history with local storage-backed storage**. The Caribou Hub's WebSocket infrastructure also enables real-time parsing progress updates, replacing the original's polling mechanism.

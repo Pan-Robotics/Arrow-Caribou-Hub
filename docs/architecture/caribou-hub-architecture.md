@@ -18,9 +18,9 @@ The system connects to one or more companion computers (typically Raspberry Pi u
 |---|---|
 | Frontend | React 19, TypeScript, Tailwind CSS 4, shadcn/ui, Recharts, Three.js, Leaflet, Socket.IO client |
 | Backend | Express 4, tRPC 11, Socket.IO server, Drizzle ORM |
-| Database | MySQL / TiDB (cloud-hosted, SSL) |
-| File Storage | S3-compatible object storage (flight logs, drone files, media) |
-| Authentication | Manus OAuth with JWT session cookies (users); per-drone API keys (companion computers) |
+| Database | SQLite (embedded local file via better-sqlite3) |
+| File Storage | Local filesystem (`./data/storage`, served at `/files/*`) for flight logs, drone files, media |
+| Authentication | Single local operator (no login); per-drone API keys (companion computers) |
 | Parser Runtime | Python 3.11 subprocess sandbox (custom app payload parsing) |
 | FC Web Server | ArduPilot [net_webserver.lua](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Scripting/applets/net_webserver.lua) (Lua scripting applet, port 8080) |
 
@@ -49,7 +49,7 @@ The architecture consists of three tiers: the browser-based frontend, the Node.j
 │  └───────────┘  └───────────┘  └───────────┘  └─────────────────┘   │
 │                         │                                            │
 │  ┌──────────────────────┴───────────────────────────────────────┐    │
-│  │  Drizzle ORM → MySQL / TiDB       S3 Object Storage         │    │
+│  │  Drizzle ORM → SQLite (local)    Local File Storage        │    │
 │  └──────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────▲────────────────────────────────────────┘
                               │  REST + WebSocket
@@ -64,7 +64,7 @@ The architecture consists of three tiers: the browser-based frontend, the Node.j
 
 ### Data Flow Summary
 
-The six primary data flows are as follows. First, **FC-to-companion log sync**: the `FCLogSyncer` class in `logs_ota_service.py` downloads flight log files from the ArduPilot [`net_webserver.lua`](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Scripting/applets/net_webserver.lua) applet running on the flight controller (HTTP on port 8080), caching them locally on the Pi for instant access; MAVFTP over MAVLink is used as a fallback when the web server is unreachable. Second, **companion-to-hub ingestion**: Python relay scripts on the Pi POST sensor data to REST endpoints, authenticated via per-drone API keys. This covers LiDAR point clouds, MAVLink/UAVCAN telemetry, camera status, FC log files, firmware flash progress, and system diagnostics. Third, **hub-to-browser broadcast**: the server validates incoming data, stores metadata in MySQL, and broadcasts payloads over Socket.IO to all subscribed browser clients. Fourth, **browser-to-hub operations**: the React frontend calls tRPC procedures for CRUD operations (drone management, log uploads, app configuration) and receives real-time data via Socket.IO subscriptions. Fifth, **hub-to-companion commands**: the drone jobs system enables reverse communication — the web UI creates jobs (file uploads, config changes, FC log scans, FC log downloads, firmware flashes), and the Pi polls for pending jobs and executes them. Sixth, **bidirectional log streaming**: the browser requests journalctl output from a specific companion service via Socket.IO; the Hub relays the request to the companion, which spawns a `journalctl -f` subprocess and streams lines back through the Hub to the browser in real-time.
+The six primary data flows are as follows. First, **FC-to-companion log sync**: the `FCLogSyncer` class in `logs_ota_service.py` downloads flight log files from the ArduPilot [`net_webserver.lua`](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Scripting/applets/net_webserver.lua) applet running on the flight controller (HTTP on port 8080), caching them locally on the Pi for instant access; MAVFTP over MAVLink is used as a fallback when the web server is unreachable. Second, **companion-to-hub ingestion**: Python relay scripts on the Pi POST sensor data to REST endpoints, authenticated via per-drone API keys. This covers LiDAR point clouds, MAVLink/UAVCAN telemetry, camera status, FC log files, firmware flash progress, and system diagnostics. Third, **hub-to-browser broadcast**: the server validates incoming data, stores metadata in the local SQLite database, and broadcasts payloads over Socket.IO to all subscribed browser clients. Fourth, **browser-to-hub operations**: the React frontend calls tRPC procedures for CRUD operations (drone management, log uploads, app configuration) and receives real-time data via Socket.IO subscriptions. Fifth, **hub-to-companion commands**: the drone jobs system enables reverse communication — the web UI creates jobs (file uploads, config changes, FC log scans, FC log downloads, firmware flashes), and the Pi polls for pending jobs and executes them. Sixth, **bidirectional log streaming**: the browser requests journalctl output from a specific companion service via Socket.IO; the Hub relays the request to the companion, which spawns a `journalctl -f` subprocess and streams lines back through the Hub to the browser in real-time.
 
 ---
 
@@ -135,7 +135,7 @@ A post-flight log analysis tool with full ArduPilot DataFlash binary parsing run
 | Summary Export | Export summary as Markdown text |
 | Compare Mode | Side-by-side comparison of two flight logs |
 | Instant Restore | Module-level cache preserves full parsed state across app switches without re-downloading or re-parsing |
-| Notes & Media | Attach Markdown notes and media files to flight logs (stored in S3) |
+| Notes & Media | Attach Markdown notes and media files to flight logs (stored on disk under `data/storage`) |
 
 The 18 chart definitions span six categories:
 
@@ -157,7 +157,7 @@ An administration panel for managing drones and their connectivity, also accessi
 | Drone Registry | Register new drones, edit name and ID, delete drones with cascading cleanup |
 | API Key Management | Generate, revoke, reactivate, and delete API keys per drone; copy-to-clipboard |
 | Connection Test | Multi-endpoint dry-run test (health, auth, pointcloud, telemetry, camera) with latency reporting |
-| File Upload | Upload files to S3 and create download jobs for the Pi (supports Python file compression) |
+| File Upload | Upload files to the Hub's local storage and create download jobs for the Pi (supports Python file compression) |
 | Job History | View all pending, completed, and failed jobs for a drone |
 | Config Script Generation | Generates ready-to-use Python relay configuration snippets |
 
@@ -167,14 +167,14 @@ A four-tab interface for flight controller log management, over-the-air firmware
 
 | Feature | Description |
 |---|---|
-| FC Logs | Three-tier log access: local cache → HTTP via FC `net_webserver.lua` (port 8080) → MAVFTP fallback. Download `.BIN`/`.log` files to S3 (multipart upload with base64 fallback), track progress in real-time, save completed logs to local PC via download proxy, send completed logs to Flight Analytics |
+| FC Logs | Three-tier log access: local cache → HTTP via FC `net_webserver.lua` (port 8080) → MAVFTP fallback. Download `.BIN`/`.log` files to the Hub's local storage (multipart upload with base64 fallback), track progress in real-time, save completed logs to local PC via download proxy, send completed logs to Flight Analytics |
 | OTA Firmware Flash | Upload `.abin`/`.apj` firmware, flash to FC via HTTP pull (Approach C with `firmware_puller.lua`), MAVLink reboot, verify via `AUTOPILOT_VERSION` git hash comparison |
 | System Diagnostics | Live CPU, memory, disk, temperature gauges; systemd service status grid; network interface table |
 | Remote Logs | Stream journalctl output from any companion service in a terminal-style viewer |
 
 ### 3.8 Mission Planner (Indicated)
 
-Autonomous flight mission planning with waypoints, geofencing, and return-to-home. A Google Maps integration component (`Map.tsx`) is available in the codebase for future use. The UI currently shows a "Coming Soon" placeholder.
+Autonomous flight mission planning with waypoints, geofencing, and return-to-home. A Leaflet/OpenStreetMap map component (`Map.tsx`) is available in the codebase (also used by Flight Analytics for the GPS ground track). The UI currently shows a "Coming Soon" placeholder.
 
 ---
 
@@ -225,7 +225,7 @@ All client-server communication (except real-time streams and companion computer
 | `firmware` | `list`, `get`, `upload`, `requestFlash` | Protected |
 | `diagnostics` | `latest`, `history` | Protected |
 
-Note: the `GET /api/rest/logs/fc-download/:logId` endpoint is not a tRPC procedure but a REST endpoint authenticated via session cookie (same mechanism as `protectedProcedure`). It streams the file from S3 with `Content-Disposition: attachment` for browser download.
+Note: the `GET /api/rest/logs/fc-download/:logId` endpoint is not a tRPC procedure but a REST endpoint authenticated via session cookie (same mechanism as `protectedProcedure`). It streams the file from the Hub's local storage with `Content-Disposition: attachment` for browser download.
 
 ### 5.2 REST API Endpoints
 
@@ -246,9 +246,9 @@ These endpoints are designed for non-tRPC clients, primarily the companion compu
 | `/api/rest/flightlog/upload` | POST | Upload flight log from companion computer |
 | `/api/rest/logs/fc-list` | POST | Report discovered FC log files from MAVFTP scan |
 | `/api/rest/logs/fc-progress` | POST | Update FC log download progress |
-| `/api/rest/logs/fc-upload` | POST | Upload downloaded FC log content (base64) to S3 |
+| `/api/rest/logs/fc-upload` | POST | Upload downloaded FC log content (base64) to local storage |
 | `/api/rest/logs/fc-upload-multipart` | POST | Upload downloaded FC log file (multipart/form-data, preferred) |
-| `/api/rest/logs/fc-download/:logId` | GET | Download proxy — streams FC log from S3 to browser (session cookie auth) |
+| `/api/rest/logs/fc-download/:logId` | GET | Download proxy — streams FC log from local storage to browser |
 | `/api/rest/firmware/progress` | POST | Update firmware flash progress and ArduPilot stage |
 | `/api/rest/diagnostics/report` | POST | Submit system diagnostics snapshot (CPU, memory, disk, temp, services) |
 
@@ -284,7 +284,7 @@ The database uses 15 tables organized around five domains: user management, dron
 
 | Table | Purpose | Key Fields |
 |---|---|---|
-| `users` | OAuth user accounts | openId, name, email, role (user / admin) |
+| `users` | Local operator account | openId, name, email, role (user / admin) |
 | `drones` | Registered drone inventory | droneId, name, lastSeen, isActive |
 | `apiKeys` | Per-drone authentication keys | key, droneId, description, isActive |
 | `scans` | Point cloud scan metadata | droneId, timestamp, pointCount, min/max distance, avgQuality |
@@ -300,9 +300,9 @@ The database uses 15 tables organized around five domains: user management, dron
 | `firmwareUpdates` | OTA firmware uploads and flash status | droneId, filename, fileSize, storageKey, url, status (uploaded / queued / transferring / flashing / verifying / completed / failed), flashStage |
 | `systemDiagnostics` | Companion computer health snapshots | droneId, cpuPercent, memoryPercent, diskPercent, cpuTempC, uptimeSeconds, services (JSON), network (JSON) |
 
-### 5.5 File Storage (S3)
+### 5.5 File Storage (local filesystem)
 
-All binary data is stored in S3-compatible object storage. The database holds only metadata and URLs. No file bytes are stored in database columns.
+All binary data is stored on the local filesystem under `data/storage` (override with `STORAGE_DIR`) and served back over `GET /files/*`. The database holds only metadata and the relative `/files/...` URLs. No file bytes are stored in database columns.
 
 | Storage Path Pattern | Content |
 |---|---|
@@ -336,12 +336,12 @@ A polling-based job queue enables the Hub to push tasks to the companion compute
 
 | Job Type | Handler | Description |
 |---|---|---|
-| `upload_file` | `raspberry_pi_client.py` | Download a file from S3 to a target path on the Pi; supports gzip compression for Python files |
+| `upload_file` | `raspberry_pi_client.py` | Download a file from the Hub's local storage to a target path on the Pi; supports gzip compression for Python files |
 | `update_config` | `raspberry_pi_client.py` | Update configuration files on the Pi |
 | `restart_service` | `raspberry_pi_client.py` | Restart a service on the Pi |
 | `scan_fc_logs` | `logs_ota_service.py` | Scan FC SD card (local cache → HTTP via `net_webserver.lua` → MAVFTP fallback) and report discovered log files |
-| `download_fc_log` | `logs_ota_service.py` | Download a specific FC log (local cache → HTTP → MAVFTP fallback) and upload to Hub S3 |
-| `flash_firmware` | `logs_ota_service.py` | Download firmware from S3, serve via HTTP for FC pull (Approach C), MAVLink reboot, verify via `AUTOPILOT_VERSION` |
+| `download_fc_log` | `logs_ota_service.py` | Download a specific FC log (local cache → HTTP → MAVFTP fallback) and upload to the Hub |
+| `flash_firmware` | `logs_ota_service.py` | Download firmware from the Hub, serve via HTTP for FC pull (Approach C), MAVLink reboot, verify via `AUTOPILOT_VERSION` |
 
 Both `raspberry_pi_client.py` and `logs_ota_service.py` poll `droneJobs.getPendingJobs` at regular intervals, acknowledge each job, execute it, and report completion or failure back to the Hub.
 
@@ -380,7 +380,7 @@ Four widget components are shared between the core apps and the App Renderer for
 
 ## 8. Authentication & Authorization
 
-Authentication operates on two separate planes. **User authentication** flows through Manus OAuth, which completes at `/api/oauth/callback` and drops a JWT session cookie. The `users` table supports two roles — `user` and `admin` — with the admin role auto-assigned to the project owner. Backend procedures are gated by `protectedProcedure` (requires valid session) or `publicProcedure` (allows anonymous access).
+Authentication operates on two separate planes. **User authentication** is local single-user mode: there is no login. Every request is treated as a fixed local "operator" (admin) account seeded in the `users` table on first run. Backend procedures still distinguish `protectedProcedure` / `adminProcedure` / `publicProcedure`, but the operator always satisfies them. **Companion authentication** is unchanged — each companion computer authenticates to the REST API with a per-drone API key.
 
 **Companion computer authentication** uses per-drone API keys stored in the `apiKeys` table. Every REST ingest request must include both an `api_key` and a `drone_id`; the server validates the key and verifies the drone ID matches before processing the payload. API keys can be generated, revoked, reactivated, and deleted through the Drone Configuration interface.
 
@@ -402,6 +402,6 @@ Authentication operates on two separate planes. **User authentication** flows th
 | REST API (Pi Integration) | **Implemented** | Point cloud, telemetry, camera, custom payload, and flight log endpoints |
 | Drone Job Queue | **Implemented** | Two-way Hub-to-Pi communication with file delivery |
 | Logs & OTA Updates | **Implemented** | FC log scan/download (HTTP primary, MAVFTP fallback), OTA firmware flash (Approach C: FC HTTP pull + version verification), system diagnostics, remote log streaming, Send to Flight Analytics |
-| Mission Planner | **Indicated** | Placeholder UI present; Google Maps component available in codebase |
+| Mission Planner | **Indicated** | Placeholder UI present; Leaflet/OpenStreetMap map component available in codebase |
 | Crosshair Sync | **Indicated** | Hover-linked cursors across Flight Analytics charts |
 | PARM Table View | **Indicated** | Searchable ArduPilot parameter table from DataFlash logs |
