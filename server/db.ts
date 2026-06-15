@@ -10,7 +10,7 @@ import { nanoid } from "nanoid";
 let _db: ReturnType<typeof drizzle> | null = null;
 
 /**
- * Local single-user mode. Authentication (Manus OAuth) has been removed for the
+ * Local single-user mode. Authentication (cloud OAuth) has been removed for the
  * local app; every request is treated as this fixed admin "operator" account.
  */
 export const LOCAL_USER_OPEN_ID = "local-admin";

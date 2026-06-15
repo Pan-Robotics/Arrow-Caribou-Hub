@@ -2,7 +2,7 @@
 
 **Heavy Cargo & Agriculture UAV Ground Station**
 
-Caribou Hub is a web-based ground station for managing unmanned aerial vehicle data pipelines. It aggregates real-time sensor streams, post-flight analytics, drone configuration, over-the-air firmware updates, and a developer-extensible app framework into a single-page application. The platform follows a **hub-and-spoke model**: a persistent sidebar provides instant access to any installed application, while a pluggable App Builder allows developers to create new data pipeline apps without modifying the core codebase.
+Caribou Hub is a local-first, self-contained ground station for managing unmanned aerial vehicle data pipelines. It aggregates real-time sensor streams, post-flight analytics, drone configuration, over-the-air firmware updates, and a developer-extensible app framework into a single-page application. The platform follows a **hub-and-spoke model**: a persistent sidebar provides instant access to any installed application, while a pluggable App Builder allows developers to create new data pipeline apps without modifying the core codebase.
 
 ---
 
@@ -63,9 +63,9 @@ The system consists of three tiers: the browser-based frontend, the Node.js serv
 |---|---|
 | Frontend | React 19, TypeScript, Tailwind CSS 4, shadcn/ui, Recharts, Three.js, Leaflet, Socket.IO client |
 | Backend | Express 4, tRPC 11, Socket.IO server, Drizzle ORM |
-| Database | MySQL / TiDB (cloud-hosted, SSL) |
-| File Storage | S3-compatible object storage |
-| Authentication | Manus OAuth + JWT (users); per-drone API keys (companion computers) |
+| Database | SQLite (embedded local file via better-sqlite3) |
+| File Storage | Local filesystem (`./data/storage`, served at `/files/*`) |
+| Authentication | Single local operator (no login); per-drone API keys (companion computers) |
 | Parser Runtime | Python 3.11 subprocess sandbox (custom app parsers) |
 | Companion Scripts | Python 3.11 with MAVSDK, aiohttp, python-socketio, psutil |
 | FC Web Server | ArduPilot [net_webserver.lua](https://github.com/ArduPilot/ardupilot/blob/master/libraries/AP_Scripting/applets/net_webserver.lua) (Lua scripting applet, port 8080) |
@@ -239,7 +239,7 @@ A polling-based job queue pushes tasks to the companion computer. Jobs follow a 
 The Drone Configuration page generates Python snippets. Example environment:
 
 ```bash
-WEB_SERVER_URL=https://your-hub.manus.space/api/rest
+WEB_SERVER_URL=http://<hub-ip>:3000/api/rest
 API_KEY=your_api_key
 DRONE_ID=caribou_001
 ```
@@ -373,28 +373,52 @@ Fifteen tables organized across five domains.
 ### Prerequisites
 
 - Node.js 22+
-- MySQL or TiDB database
 - pnpm package manager
+- Python 3.11+ (only for the custom-app parser sandbox; optional otherwise)
 
-### Installation
+No database server or cloud account is required — the Hub uses an embedded
+SQLite database and local file storage, both created automatically on first run.
+
+### Run locally (development)
 
 ```bash
 pnpm install
-pnpm db:push
 pnpm dev
 ```
 
+Then open <http://localhost:3000>. On first launch the Hub creates
+`./data/caribou.db` (schema auto-migrated) and `./data/storage/` for uploaded
+files. There is no login — the local operator is treated as the admin.
+
+### Build & run (production)
+
+```bash
+pnpm build
+pnpm start
+```
+
+This bundles the client and server into `dist/` and serves the built assets
+from the same Express process.
+
 ### Environment Variables
 
-Environment variables are managed through the Manus platform. Key variables include `DATABASE_URL`, `JWT_SECRET`, `VITE_APP_TITLE`, and `VITE_APP_LOGO`. Update `VITE_APP_TITLE` via Management Dashboard > Settings > General.
+All configuration is optional — see [`.env.example`](.env.example). Copy it to
+`.env` only to override a default:
 
-### Deployment
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `3000` | Port the Hub listens on (auto-bumps if busy) |
+| `DATABASE_URL` | `./data/caribou.db` | SQLite file path (or `file:`/`sqlite:` URL) |
+| `STORAGE_DIR` | `./data/storage` | Directory for uploaded files |
+| `PUBLIC_BASE_URL` | request host | Absolute base URL drones use to fetch files (set to the Hub's LAN/Tailscale address for multi-host setups) |
 
-1. Create a checkpoint via the Management UI
-2. Click **Publish** in the dashboard header
-3. The site is live at `https://your-project.manus.space`
+### Accessing the Hub from other devices
 
-Custom domain binding is available through Management Dashboard > Settings > Domains.
+`pnpm dev`/`pnpm start` listen on all interfaces, so the Hub is reachable on the
+LAN at `http://<hub-ip>:3000`. For companion computers (drones) to download
+files queued in jobs, set `PUBLIC_BASE_URL` to that reachable address. Remote
+access from outside the LAN (e.g. drones in the field) is intended to run over
+Tailscale — see the companion setup docs.
 
 ### Companion Computer Setup
 
@@ -449,4 +473,3 @@ MIT License
 - **MAVSDK** for flight controller communication
 - **shadcn/ui** for UI components
 - **tRPC** for type-safe APIs
-- **Manus Platform** for hosting and deployment

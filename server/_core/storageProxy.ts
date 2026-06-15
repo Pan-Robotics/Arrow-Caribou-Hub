@@ -20,7 +20,7 @@ const CONTENT_TYPES: Record<string, string> = {
 
 /**
  * Serve objects written by server/storage.ts from the local storage root.
- * Replaces the previous Manus/S3 signed-URL proxy.
+ * Replaces the previous cloud (S3) signed-URL proxy.
  */
 export function registerStorageProxy(app: Express) {
   app.get("/files/*", (req: Request, res: Response) => {

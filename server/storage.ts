@@ -2,7 +2,7 @@
 //
 // Files are written under a local storage root (default: <cwd>/data/storage,
 // override with STORAGE_DIR) and served back by the /files/* route registered in
-// server/_core/storageProxy.ts. This replaces the previous Manus/S3 storage proxy.
+// server/_core/storageProxy.ts. This replaces the previous cloud (S3) storage proxy.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";

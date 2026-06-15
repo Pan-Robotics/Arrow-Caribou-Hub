@@ -2,7 +2,7 @@ import { useState } from "react";
 // Caribou Hub branding
 const HUB_TITLE = "Caribou Hub";
 const HUB_SUBTITLE = "Heavy Cargo & Agriculture UAV Ground Station";
-const CARIBOU_LOGO = "https://files.manuscdn.com/user_upload_by_module/session_file/104102086/pvNNZkXlGeFWOKMU.png";
+const CARIBOU_LOGO = "/caribou-logo.png";
 import { Radio, Gauge, Package, Sparkles, Settings, Camera, ScrollText, Map, BarChart3 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import AppSidebar, { App } from "@/components/AppSidebar";

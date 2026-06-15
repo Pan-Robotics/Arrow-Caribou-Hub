@@ -11,7 +11,7 @@ export type TrpcContext = {
 export async function createContext(
   opts: CreateExpressContextOptions
 ): Promise<TrpcContext> {
-  // Local single-user mode: Manus OAuth has been removed. Every request is the
+  // Local single-user mode: cloud OAuth has been removed. Every request is the
   // fixed local admin operator. (Companion computers still authenticate to the
   // REST API with per-drone API keys, independent of this user context.)
   const user = await getLocalUser();

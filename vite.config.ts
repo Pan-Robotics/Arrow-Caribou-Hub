@@ -1,13 +1,9 @@
-import { jsxLocPlugin } from "@builder.io/vite-plugin-jsx-loc";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import fs from "node:fs";
 import path from "path";
 import { defineConfig } from "vite";
-import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
-
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime()];
+const plugins = [react(), tailwindcss()];
 
 export default defineConfig({
   plugins,
@@ -26,16 +22,11 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // Listen on all interfaces so the Hub is reachable over the LAN
+    // (and later via Tailscale). Allow any Host header — this is a trusted
+    // local app, and LAN/Tailscale access uses non-localhost hostnames.
     host: true,
-    allowedHosts: [
-      ".manuspre.computer",
-      ".manus.computer",
-      ".manus-asia.computer",
-      ".manuscomputer.ai",
-      ".manusvm.computer",
-      "localhost",
-      "127.0.0.1",
-    ],
+    allowedHosts: true,
     fs: {
       strict: true,
       deny: ["**/.*"],
