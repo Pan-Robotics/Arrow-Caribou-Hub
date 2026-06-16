@@ -8,6 +8,13 @@
       "when": 1781530852114,
       "tag": "0000_noisy_morlocks",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1781577424884,
+      "tag": "0001_spotty_william_stryker",
+      "breakpoints": true
     }
   ]
 }

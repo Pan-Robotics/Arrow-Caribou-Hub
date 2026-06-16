@@ -10,6 +10,7 @@ This directory contains all architecture documents, pipeline references, and spe
 |---|---|
 | [caribou-hub-architecture.md](architecture/caribou-hub-architecture.md) | Master architecture document — full system overview, all endpoints, database schema, companion scripts, frontend apps, and deployment topology |
 | [Tailscale_Network_Architecture.md](architecture/Tailscale_Network_Architecture.md) | Remote-access network design — single-tailnet mesh over 4G, ACL tags/grants for fleets & multi-operator, drone-as-tailnet-service pull model, provisioning, and `infra/tailscale/` scripts |
+| [Caribou_Drone_Stream_Protocol.md](architecture/Caribou_Drone_Stream_Protocol.md) | Pull data-plane wire contract — WebSocket frames the Hub subscriber pulls from a drone's tailnet stream service (telemetry/camera_status/pointcloud), subprotocol auth, heartbeat, reconnection, and the `hublink_service.py` reference |
 | [Caribou_Camera_Feed_Architecture.md](architecture/Caribou_Camera_Feed_Architecture.md) | Camera feed pipeline — generic multi-stream architecture, go2rtc, Tailscale tailnet (Funnel optional), WHEP SDP proxy, WebRTC signaling, frontend multi-stream UI |
 | [flight-analytics-integration-analysis.md](architecture/flight-analytics-integration-analysis.md) | Integration analysis mapping the Flight-Log-Analyser tool to Caribou Hub infrastructure — parser reuse, chart rendering, storage, and implementation phases |
 
@@ -50,7 +51,7 @@ Companion script documentation is consolidated in a single file:
 
 | Document | Description |
 |---|---|
-| [companion_scripts/COMPANION_SERVICES.md](../companion_scripts/COMPANION_SERVICES.md) | All 4 companion services — Hub Client, Telemetry Forwarder, Logs & OTA, Camera Stream — with CLI args, install steps, troubleshooting, and security |
+| [companion_scripts/COMPANION_SERVICES.md](../companion_scripts/COMPANION_SERVICES.md) | Companion services — Hub Client, Telemetry Forwarder, Logs & OTA, Camera Stream (production push path), plus the HubLink pull-mode reference (Phase B) — with CLI args, install steps, troubleshooting, and security |
 
 ## Archive
 

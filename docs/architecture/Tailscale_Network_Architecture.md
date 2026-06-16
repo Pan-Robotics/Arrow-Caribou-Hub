@@ -149,16 +149,33 @@ broadcast layer is unchanged). Multiple hubs each hold their own subscription to
 the same drone → built-in multi-operator monitoring.
 
 This **inverts** today's flow (companion `POST`s to Hub REST ingest). The REST
-ingest endpoints can remain during transition (benchtop/push mode) and be retired
-once the pull model lands; both can coexist behind a per-drone "mode" flag.
+ingest endpoints remain during transition (benchtop/push mode) and are retired
+once the pull model lands; both coexist behind the per-drone `drones.ingestMode`
+flag (`"push"` default / `"pull"`).
 
-### 6.3 Commands (hub → drone)
+**Implemented (Phase B1, read path):** the Hub subscriber
+(`server/droneSubscriber.ts`) + the IO-free frame interpreter
+(`server/droneStreamProtocol.ts`) pull **telemetry / camera_status / pointcloud**
+over a WebSocket and feed the existing `broadcast*` + persistence path. The wire
+contract is specified in
+[Caribou_Drone_Stream_Protocol.md](Caribou_Drone_Stream_Protocol.md);
+`companion_scripts/hublink_service.py` is the drone-side reference. Switch a drone
+with the `drones.setConnection` tRPC mutation (`ingestMode`, `tailnetHost`,
+`streamPort`), or the Drone Configuration **Data Plane & Control** card.
 
-Monitoring is many-hubs-read. **Control** must be single-writer to be safe. The
-drone exposes a command endpoint that accepts commands only from the hub holding
-the **active control lease** (a token the drone issues; one at a time). Other
-hubs may observe but not command until the lease is released/transferred. (Detail
-to finalise in Phase B; the existing job-queue/API-key machinery is the basis.)
+### 6.3 Commands (hub → drone) — **Implemented (Phase B2)**
+
+Monitoring is many-hubs-read. **Control** is single-writer: the **drone is the
+lease arbiter** (the only node every hub shares). It grants at most one **control
+lease** at a time, with a TTL kept alive by the holder's heartbeat; a hub that
+crashes/disconnects loses control automatically (the drone revokes the expired
+lease) so another hub can take over. Commands ride the same pull WebSocket and are
+executed only from the lease holder's connection (else `no_control`).
+
+Hub side: per-drone control state + `control_status` over Socket.IO; tRPC
+`drones.acquireControl` / `releaseControl` / `controlStatus` / `sendCommand`; UI in
+Drone Configuration. Full frame contract and rules in
+[Caribou_Drone_Stream_Protocol.md](Caribou_Drone_Stream_Protocol.md) §9.
 
 ---
 
@@ -248,23 +265,45 @@ genuinely cross-org consumer appears.
 - `infra/tailscale/setup-drone-tailscale.sh` — tagged ephemeral join for a System Unit.
 - `camera_stream_service.py` — register the **tailnet** WHEP URL (Funnel behind a flag).
 
-**Phase B — pull data-plane (larger; coexists with push during transition):**
-- System Unit `HubLink.py` becomes a **tailnet service** (telemetry/data stream +
-  payload + command endpoints) — designed here, built as the System Unit V1 lands.
-- Hub gains an **outbound subscriber** that connects to each managed drone's tailnet
-  service and re-broadcasts to browsers; REST ingest kept until retired.
-- Control lease for single-writer commands.
+**Phase B1 — pull data-plane, read path (DONE; coexists with push):**
+- `drones` table gains `ingestMode` (`push`/`pull`), `tailnetHost`, `streamPort`.
+- Hub **outbound subscriber** (`server/droneSubscriber.ts`) connects to each
+  pull-mode drone's tailnet WebSocket and re-broadcasts telemetry/camera_status/
+  pointcloud via the existing `broadcast*` path; REST push ingest untouched.
+- IO-free interpreter (`server/droneStreamProtocol.ts`); wire contract in
+  [Caribou_Drone_Stream_Protocol.md](Caribou_Drone_Stream_Protocol.md).
+- Drone-side reference: `companion_scripts/hublink_service.py` (`--demo`).
+- `drones.setConnection` tRPC mutation toggles mode + reconciles the subscriber.
+
+**Phase B2 — pull data-plane, write path (DONE):**
+- **Single-writer control lease** (drone-authoritative: grant/deny/heartbeat/
+  expire/revoke) + lease-gated **commands**, over the same pull WebSocket — frames
+  in `server/droneStreamProtocol.ts`, state machine in `server/droneSubscriber.ts`.
+- `control_status` Socket.IO room (`server/websocket.ts`); tRPC
+  `drones.acquireControl`/`releaseControl`/`controlStatus`/`sendCommand`.
+- Drone Configuration **Data Plane & Control** card (mode/host/port + acquire/
+  release control, live status).
+- Reference companion `hublink_service.py` arbitrates the lease + handles commands.
+
+**Phase B-next — remaining:**
+- System Unit `HubLink.py` productionised on V1 (real MAVSDK/UAVCAN source behind
+  the same wire protocol; the reference already serves read + control paths).
+- Per-payload capability manifest for heterogeneous loadouts (typed commands).
 
 **Unchanged:** the browser-facing Socket.IO broadcast layer, the `drones`/`apiKeys`
 tables, the job queue (re-used for control), the local SQLite/file storage.
 
 ---
 
-## 13. Open items to finalise in Phase B
+## 13. Remaining open items
 
-- Telemetry stream transport from the drone: WebSocket vs SSE vs gRPC.
-- Control-lease lifecycle (acquire/heartbeat/release/transfer) and UI.
+- ~~Telemetry stream transport~~ — **decided & built: WebSocket** (one
+  bidirectional channel carrying telemetry, heartbeat, lease, and commands).
+- ~~Control-lease lifecycle and UI~~ — **built** (acquire/heartbeat/release +
+  drone-side expire/revoke; transfer = release-then-acquire; UI in Drone Config).
 - Per-payload endpoint discovery: static registration vs a capability manifest the
-  drone advertises (preferred for heterogeneous loadouts).
+  drone advertises (preferred for heterogeneous loadouts) — **next**.
 - Whether the Hub subscribes directly to each drone, or a per-fleet aggregator
-  reduces N×M connections at large scale.
+  reduces N×M connections at large scale — revisit at fleet scale.
+- Lease **transfer/pre-emption** UX: today another hub must wait for release or TTL
+  expiry; an explicit "request handover" flow could be added if operations need it.

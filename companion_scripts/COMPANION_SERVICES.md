@@ -15,6 +15,12 @@ This document covers all Python companion scripts, systemd services, and install
 | Telemetry Forwarder | `telemetry_forwarder.py` | `telemetry-forwarder.service` | `install_telemetry_forwarder.sh` | MAVLink + UAVCAN telemetry relay |
 | Logs & OTA | `logs_ota_service.py` | `logs-ota.service` | `install_logs_ota.sh` | FC log download, OTA firmware flash, diagnostics, remote log streaming |
 | Camera Stream | `camera_stream_service.py` | `camera-stream.service` | `install_camera_services.sh` | go2rtc lifecycle management, Tailscale funnel, Hub stream registration with heartbeat |
+| HubLink *(reference, Phase B)* | `hublink_service.py` | — | — | Drone-side tailnet **WebSocket stream service**: the Hub pulls telemetry from it and (holding the single-writer **control lease**) sends commands — inverts the push forwarder. Reference impl; productionised when System Unit V1 lands. See [Caribou_Drone_Stream_Protocol.md](../docs/architecture/Caribou_Drone_Stream_Protocol.md) |
+
+The first four services are the current production (push) data path — they POST to
+the Hub. **HubLink** is the Tailscale Phase B pull counterpart: the Hub opens an
+outbound connection to it instead (see the protocol doc). They coexist; a drone's
+`ingestMode` (`push`/`pull`) selects which is active.
 
 All services are designed to run as the `alexd` user (configurable during install), auto-restart on failure, and log to journald for remote streaming via the Logs & OTA app.
 
