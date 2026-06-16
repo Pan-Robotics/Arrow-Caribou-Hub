@@ -1,7 +1,8 @@
 # Caribou Drone Stream Protocol (pull data-plane)
 
 **Status:** Implemented. Phase B1 — read path (telemetry/camera/pointcloud).
-Phase B2 — write path (single-writer control lease + commands), §9.
+Phase B2 — write path (single-writer control lease + commands), §9. Capability
+manifest (per-payload typed commands), §10.
 
 This is the wire contract for the **pull** data plane: the Hub opens an outbound
 WebSocket *to* a drone's tailnet stream service, receives telemetry, and — when it
@@ -230,3 +231,62 @@ to `none` (the drone has expired the old lease) — control must be re-acquired.
 > Two-layer safety unchanged: Tailscale ACLs gate *who can reach the port*, the
 > per-drone API key gates *which drone a hub may pull/command*, and the lease gates
 > *which one of those hubs may command at any instant*.
+
+---
+
+## 10. Capability manifest (per-payload typed commands)
+
+Drones carry **heterogeneous payload loadouts**, so the set of valid commands is
+per-drone. Rather than a fixed command list, a drone **advertises a capability
+manifest** that the Hub uses to (a) render typed command forms and (b) reject
+unknown actions before they hit the wire. The drone remains the final authority.
+
+### 10.1 Frames
+
+**Hub → Drone:** `{ "type": "get_manifest" }` — sent on connect; the drone may also
+push a `manifest` frame unsolicited (e.g. after `hello`, or when a payload is
+hot-swapped).
+
+**Drone → Hub:**
+```json
+{
+  "type": "manifest",
+  "payloads": [
+    {
+      "id": "camera",
+      "name": "Gimbal Camera",
+      "commands": [
+        { "action": "set_zoom", "label": "Set Zoom",
+          "params": [ { "name": "level", "type": "number", "min": 1, "max": 10, "step": 1, "required": true } ] },
+        { "action": "set_mode", "label": "Set Mode",
+          "params": [ { "name": "mode", "type": "enum", "options": ["photo","video","night"], "required": true } ] },
+        { "action": "start_recording", "label": "Start Recording", "params": [] }
+      ]
+    },
+    { "id": "winch", "name": "Payload Winch", "commands": [ /* … */ ] }
+  ]
+}
+```
+
+### 10.2 Param types
+
+`number` (`min`/`max`/`step`), `string`, `boolean`, `enum` (`options[]`). Each param
+may carry `label`, `required`, and `default`. Unknown param types degrade to
+`string`; malformed payloads/commands/params are dropped (lenient
+`normalizeManifest`), so a partly-broken manifest still yields what is well-formed.
+
+### 10.3 Hub-side mapping
+
+- `server/droneStreamProtocol.ts` `normalizeManifest()` coerces the untrusted frame
+  into a typed `CapabilityManifest`.
+- The subscriber stores the latest manifest per connection, requests it on open,
+  and surfaces changes as `capabilities` over Socket.IO (`subscribe_capabilities`);
+  tRPC `drones.capabilities` returns it.
+- `sendCommand` rejects actions absent from the manifest with `unknown_action`
+  (only when a manifest is present — no manifest means anything is allowed, so the
+  control path still works against a drone that advertises nothing).
+- UI: `client/src/components/DronePayloadCommands.tsx` renders each payload's
+  commands as typed inputs, gated on holding the lease.
+
+Production builds the manifest from the actual detected loadout; the reference
+`hublink_service.py` advertises a representative demo (camera + winch).

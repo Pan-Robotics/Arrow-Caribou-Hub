@@ -22,6 +22,85 @@ import type {
 /** Protocol version the Hub speaks. Bumped on a breaking frame change. */
 export const DRONE_STREAM_PROTOCOL_VERSION = 1;
 
+// ── Capability manifest (per-payload typed commands) ──────────────────────────
+
+/** A single command parameter, used to render a typed input in the UI. */
+export interface CapabilityParam {
+  name: string;
+  type: "number" | "string" | "boolean" | "enum";
+  label?: string;
+  required?: boolean;
+  min?: number;
+  max?: number;
+  step?: number;
+  /** Allowed values when type === "enum". */
+  options?: string[];
+  default?: unknown;
+}
+
+/** One command a payload supports. */
+export interface CapabilityCommand {
+  action: string;
+  label?: string;
+  description?: string;
+  params: CapabilityParam[];
+}
+
+/** A payload (camera, winch, sensor, …) and the commands it exposes. */
+export interface CapabilityPayload {
+  id: string;
+  name?: string;
+  commands: CapabilityCommand[];
+}
+
+/** What a drone advertises it can do — drives typed command UI + validation. */
+export interface CapabilityManifest {
+  payloads: CapabilityPayload[];
+}
+
+const PARAM_TYPES = new Set(["number", "string", "boolean", "enum"]);
+
+/**
+ * Coerce an untrusted manifest payload into a typed `CapabilityManifest`,
+ * dropping malformed entries rather than throwing. Lenient so a partially-broken
+ * manifest still yields whatever is well-formed.
+ */
+export function normalizeManifest(raw: unknown): CapabilityManifest {
+  const payloadsRaw = isObject(raw) && Array.isArray((raw as any).payloads) ? (raw as any).payloads : [];
+  const payloads: CapabilityPayload[] = [];
+  for (const p of payloadsRaw) {
+    if (!isObject(p) || typeof p.id !== "string") continue;
+    const commandsRaw = Array.isArray(p.commands) ? p.commands : [];
+    const commands: CapabilityCommand[] = [];
+    for (const c of commandsRaw) {
+      if (!isObject(c) || typeof c.action !== "string") continue;
+      const paramsRaw = Array.isArray(c.params) ? c.params : [];
+      const params: CapabilityParam[] = [];
+      for (const pr of paramsRaw) {
+        if (!isObject(pr) || typeof pr.name !== "string") continue;
+        const type = typeof pr.type === "string" && PARAM_TYPES.has(pr.type) ? (pr.type as CapabilityParam["type"]) : "string";
+        const param: CapabilityParam = { name: pr.name, type };
+        if (typeof pr.label === "string") param.label = pr.label;
+        if (typeof pr.required === "boolean") param.required = pr.required;
+        if (typeof pr.min === "number") param.min = pr.min;
+        if (typeof pr.max === "number") param.max = pr.max;
+        if (typeof pr.step === "number") param.step = pr.step;
+        if (Array.isArray(pr.options)) param.options = pr.options.filter((o: unknown): o is string => typeof o === "string");
+        if (pr.default !== undefined) param.default = pr.default;
+        params.push(param);
+      }
+      const command: CapabilityCommand = { action: c.action, params };
+      if (typeof c.label === "string") command.label = c.label;
+      if (typeof c.description === "string") command.description = c.description;
+      commands.push(command);
+    }
+    const payload: CapabilityPayload = { id: p.id, commands };
+    if (typeof p.name === "string") payload.name = p.name;
+    payloads.push(payload);
+  }
+  return { payloads };
+}
+
 /**
  * Frames a drone may send to the Hub. `drone_id` is intentionally NOT carried
  * per-frame — the Hub knows which drone a connection belongs to and injects it,
@@ -30,6 +109,7 @@ export const DRONE_STREAM_PROTOCOL_VERSION = 1;
  */
 export type DroneInboundFrame =
   | { type: "hello"; protocol?: number; services?: string[] }
+  | { type: "manifest"; payloads?: unknown }
   | { type: "pong"; ts?: number }
   | { type: "telemetry"; timestamp?: string; telemetry: unknown }
   | ({ type: "camera_status" } & Omit<CameraStatusMessage, "drone_id" | "timestamp"> & { timestamp?: number })
@@ -44,6 +124,7 @@ export type DroneInboundFrame =
 /** Frames the Hub sends to a drone. */
 export type DroneOutboundFrame =
   | { type: "ping"; ts: number }
+  | { type: "get_manifest" }
   // ── Control / lease (Phase B2). The drone is the single lease arbiter. ──
   | { type: "lease_acquire"; hub_id: string; request_id: string }
   | { type: "lease_heartbeat"; lease_id: string }
@@ -56,6 +137,7 @@ export type DroneOutboundFrame =
  */
 export type DroneDispatch =
   | { kind: "hello"; protocol: number; services: string[] }
+  | { kind: "manifest"; manifest: CapabilityManifest }
   | { kind: "pong" }
   | { kind: "telemetry"; message: TelemetryMessage }
   | { kind: "camera_status"; message: CameraStatusMessage }
@@ -121,6 +203,11 @@ export function interpretDroneFrame(
         protocol: typeof f.protocol === "number" ? f.protocol : DRONE_STREAM_PROTOCOL_VERSION,
         services: Array.isArray(f.services) ? f.services.filter((s): s is string => typeof s === "string") : [],
       };
+    }
+
+    case "manifest": {
+      const f = frame as Extract<DroneInboundFrame, { type: "manifest" }>;
+      return { kind: "manifest", manifest: normalizeManifest(f) };
     }
 
     case "pong":

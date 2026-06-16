@@ -285,10 +285,18 @@ genuinely cross-org consumer appears.
   release control, live status).
 - Reference companion `hublink_service.py` arbitrates the lease + handles commands.
 
-**Phase B-next — remaining:**
-- System Unit `HubLink.py` productionised on V1 (real MAVSDK/UAVCAN source behind
-  the same wire protocol; the reference already serves read + control paths).
-- Per-payload capability manifest for heterogeneous loadouts (typed commands).
+**B-next — per-payload capability manifest (DONE):**
+- Drones advertise a typed-command **manifest**; the Hub renders typed forms and
+  rejects unknown actions (`unknown_action`) before they reach the wire.
+- Frames `get_manifest`/`manifest` + `normalizeManifest` in
+  `server/droneStreamProtocol.ts`; subscriber stores + `capabilities` Socket.IO
+  room; tRPC `drones.capabilities`; UI `client/src/components/DronePayloadCommands.tsx`.
+- Protocol contract in [Caribou_Drone_Stream_Protocol.md](Caribou_Drone_Stream_Protocol.md) §10.
+
+**Remaining:**
+- System Unit `HubLink.py` productionised on V1 (real MAVSDK/UAVCAN source +
+  loadout-derived manifest behind the same wire protocol; the reference already
+  serves read + control + manifest paths).
 
 **Unchanged:** the browser-facing Socket.IO broadcast layer, the `drones`/`apiKeys`
 tables, the job queue (re-used for control), the local SQLite/file storage.

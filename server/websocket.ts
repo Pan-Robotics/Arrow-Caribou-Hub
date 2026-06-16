@@ -169,6 +169,17 @@ export function initializeWebSocket(httpServer: HTTPServer) {
       socket.leave(`control:${droneId}`);
     });
 
+    // Subscribe to a drone's capability manifest (B-next)
+    socket.on('subscribe_capabilities', (droneId: string) => {
+      console.log(`[WebSocket] Client ${socket.id} subscribed to capabilities: ${droneId}`);
+      socket.join(`capabilities:${droneId}`);
+    });
+
+    socket.on('unsubscribe_capabilities', (droneId: string) => {
+      console.log(`[WebSocket] Client ${socket.id} unsubscribed from capabilities: ${droneId}`);
+      socket.leave(`capabilities:${droneId}`);
+    });
+
     // Subscribe to logs & OTA events
     socket.on('subscribe_logs', (droneId: string) => {
       console.log(`[WebSocket] Client ${socket.id} subscribed to logs: ${droneId}`);
@@ -405,6 +416,15 @@ export interface ControlStatusBroadcast {
 export function broadcastControlStatus(status: ControlStatusBroadcast) {
   if (!io) return;
   io.to(`control:${status.droneId}`).emit('control_status', status);
+}
+
+/**
+ * Broadcast a drone's capability manifest to subscribed browser clients (B-next).
+ * `manifest` is the normalized CapabilityManifest from droneStreamProtocol.
+ */
+export function broadcastCapabilities(droneId: string, manifest: unknown) {
+  if (!io) return;
+  io.to(`capabilities:${droneId}`).emit('capabilities', { droneId, manifest });
 }
 
 export function getWebSocketServer() {

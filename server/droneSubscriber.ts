@@ -25,6 +25,7 @@ import {
   interpretDroneFrame,
   DRONE_STREAM_PROTOCOL_VERSION,
   type DroneDispatch,
+  type CapabilityManifest,
 } from "./droneStreamProtocol";
 import type {
   TelemetryMessage,
@@ -36,6 +37,7 @@ import {
   broadcastCameraStatus,
   broadcastPointCloud,
   broadcastControlStatus,
+  broadcastCapabilities,
 } from "./websocket";
 import { getPullDrones, getActiveApiKeyForDrone, insertTelemetry, upsertDrone } from "./db";
 
@@ -130,6 +132,8 @@ export interface SubscriberManagerOptions {
   hubId?: string;
   /** Called whenever a drone's control status changes (→ broadcast to browsers). */
   onControlChange?: (status: ControlStatus) => void;
+  /** Called whenever a drone's capability manifest changes (→ broadcast to browsers). */
+  onCapabilitiesChange?: (droneId: string, manifest: CapabilityManifest) => void;
   /** Timeout for a lease_acquire / command round-trip (ms). */
   acquireTimeoutMs?: number;
   commandTimeoutMs?: number;
@@ -240,16 +244,33 @@ class DroneStreamConnection {
   private pendingAcquire: { requestId: string; resolve: (r: AcquireResult) => void; timer: { cancel: () => void } } | null = null;
   private pendingCommands = new Map<string, { resolve: (r: CommandResult) => void; timer: { cancel: () => void } }>();
 
+  // ── Capability manifest (B-next) ──
+  private manifest: CapabilityManifest | null = null;
+
   constructor(
     public config: DroneConnConfig,
     private deps: Required<
       Pick<
         SubscriberManagerOptions,
         | "socketFactory" | "sink" | "schedule" | "heartbeatMs" | "backoffMinMs" | "backoffMaxMs" | "log"
-        | "hubId" | "onControlChange" | "acquireTimeoutMs" | "commandTimeoutMs" | "leaseTtlDefaultMs"
+        | "hubId" | "onControlChange" | "onCapabilitiesChange" | "acquireTimeoutMs" | "commandTimeoutMs" | "leaseTtlDefaultMs"
       >
     > & { clock: { nowIso?: () => string; nowMs?: () => number } }
   ) {}
+
+  getCapabilities(): CapabilityManifest | null {
+    return this.manifest;
+  }
+
+  /** Set of every action the drone advertises (across payloads), or null if no manifest. */
+  private knownActions(): Set<string> | null {
+    if (!this.manifest) return null;
+    const actions = new Set<string>();
+    for (const payload of this.manifest.payloads) {
+      for (const cmd of payload.commands) actions.add(cmd.action);
+    }
+    return actions;
+  }
 
   private now(): number {
     return this.deps.clock.nowMs ? this.deps.clock.nowMs() : Date.now();
@@ -318,6 +339,8 @@ class DroneStreamConnection {
     this.lastError = null;
     this.deps.log(`[DroneSubscriber] Connected to ${this.config.droneId} (${this.config.host}:${this.config.port})`);
     this.startHeartbeat();
+    // Request the capability manifest (the drone may also push it unsolicited).
+    this.send({ type: "get_manifest" });
     // A reconnect means any prior lease was lost (the drone expires it while we
     // were gone) — reset control state and let browsers know we're live again.
     this.controlState = "none";
@@ -350,6 +373,13 @@ class DroneStreamConnection {
         this.deps.log(
           `[DroneSubscriber] ${this.config.droneId} hello: protocol v${dispatch.protocol}, services=[${dispatch.services.join(", ")}]`
         );
+        break;
+      case "manifest":
+        this.manifest = dispatch.manifest;
+        this.deps.log(
+          `[DroneSubscriber] ${this.config.droneId} manifest: ${dispatch.manifest.payloads.length} payload(s)`
+        );
+        this.deps.onCapabilitiesChange(this.config.droneId, dispatch.manifest);
         break;
       case "pong":
         break;
@@ -437,6 +467,12 @@ class DroneStreamConnection {
     }
     if (this.state !== "open") {
       return Promise.resolve({ ok: false, result: null, error: "not_connected" });
+    }
+    // If the drone advertised a manifest, reject unknown actions early (the drone
+    // remains the final authority; this is fast UX feedback). No manifest → allow.
+    const actions = this.knownActions();
+    if (actions && !actions.has(action)) {
+      return Promise.resolve({ ok: false, result: null, error: "unknown_action" });
     }
     const requestId = this.nextReqId("cmd");
     return new Promise<CommandResult>((resolve) => {
@@ -638,6 +674,7 @@ export class DroneSubscriberManager {
   private log: (msg: string) => void;
   private hubId: string;
   private onControlChange: (status: ControlStatus) => void;
+  private onCapabilitiesChange: (droneId: string, manifest: CapabilityManifest) => void;
   private acquireTimeoutMs: number;
   private commandTimeoutMs: number;
   private leaseTtlDefaultMs: number;
@@ -654,6 +691,8 @@ export class DroneSubscriberManager {
     this.log = options.log ?? ((m) => console.log(m));
     this.hubId = options.hubId ?? HUB_ID;
     this.onControlChange = options.onControlChange ?? ((status) => broadcastControlStatus(status));
+    this.onCapabilitiesChange =
+      options.onCapabilitiesChange ?? ((droneId, manifest) => broadcastCapabilities(droneId, manifest));
     this.acquireTimeoutMs = options.acquireTimeoutMs ?? 8_000;
     this.commandTimeoutMs = options.commandTimeoutMs ?? 10_000;
     this.leaseTtlDefaultMs = options.leaseTtlDefaultMs ?? 30_000;
@@ -671,6 +710,7 @@ export class DroneSubscriberManager {
       clock: this.clock,
       hubId: this.hubId,
       onControlChange: this.onControlChange,
+      onCapabilitiesChange: this.onCapabilitiesChange,
       acquireTimeoutMs: this.acquireTimeoutMs,
       commandTimeoutMs: this.commandTimeoutMs,
       leaseTtlDefaultMs: this.leaseTtlDefaultMs,
@@ -770,6 +810,11 @@ export class DroneSubscriberManager {
     };
   }
 
+  /** A drone's advertised capability manifest, or null if unknown/not connected. */
+  capabilities(droneId: string): CapabilityManifest | null {
+    return this.connections.get(droneId)?.getCapabilities() ?? null;
+  }
+
   /** Number of live connections (test/diagnostic helper). */
   get size() {
     return this.connections.size;
@@ -817,4 +862,8 @@ export async function sendDroneCommand(
 
 export function droneControlStatus(droneId: string): ControlStatus {
   return getDroneSubscriberManager().controlStatus(droneId);
+}
+
+export function droneCapabilities(droneId: string): CapabilityManifest | null {
+  return getDroneSubscriberManager().capabilities(droneId);
 }

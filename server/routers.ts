@@ -9,6 +9,7 @@ import {
   releaseDroneControl,
   sendDroneCommand,
   droneControlStatus,
+  droneCapabilities,
 } from "./droneSubscriber";
 import {
   upsertDrone,
@@ -808,6 +809,13 @@ export const appRouter = router({
       .input(z.object({ droneId: z.string() }))
       .query(async ({ input }) => {
         return { status: droneControlStatus(input.droneId) };
+      }),
+
+    // The drone's advertised capability manifest (per-payload typed commands).
+    capabilities: publicProcedure
+      .input(z.object({ droneId: z.string() }))
+      .query(async ({ input }) => {
+        return { manifest: droneCapabilities(input.droneId) };
       }),
 
     // Acquire (or renew) the single-writer control lease on a drone.

@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { io } from "socket.io-client";
 import { trpc } from "@/lib/trpc";
+import { DronePayloadCommands } from "@/components/DronePayloadCommands";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1327,6 +1328,13 @@ export default function DroneConfig() {
                       <span>Control is available. Acquire it to send commands; other Hubs may still monitor.</span>
                     )}
                   </div>
+
+                  {/* Typed per-payload commands from the drone's capability manifest */}
+                  <Separator />
+                  <DronePayloadCommands
+                    droneId={selectedDrone}
+                    haveControl={!!controlStatus?.haveControl}
+                  />
                 </div>
               </>
             )}

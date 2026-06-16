@@ -135,15 +135,62 @@ class DemoTelemetrySource:
         }
 
 
+# ── Capability manifest ──────────────────────────────────────────────────────
+# Per-payload typed commands this drone advertises to Hubs. The Hub renders these
+# as typed forms and validates actions against them. Production builds this from
+# the actual detected payload loadout; here it is a representative demo.
+DEMO_MANIFEST = {
+    "payloads": [
+        {
+            "id": "camera",
+            "name": "Gimbal Camera",
+            "commands": [
+                {
+                    "action": "set_zoom", "label": "Set Zoom",
+                    "params": [
+                        {"name": "level", "type": "number", "label": "Zoom level",
+                         "min": 1, "max": 10, "step": 1, "required": True, "default": 1},
+                    ],
+                },
+                {
+                    "action": "set_mode", "label": "Set Mode",
+                    "params": [
+                        {"name": "mode", "type": "enum", "label": "Mode",
+                         "options": ["photo", "video", "night"], "required": True},
+                    ],
+                },
+                {"action": "start_recording", "label": "Start Recording", "params": []},
+                {"action": "stop_recording", "label": "Stop Recording", "params": []},
+            ],
+        },
+        {
+            "id": "winch",
+            "name": "Payload Winch",
+            "commands": [
+                {
+                    "action": "deploy", "label": "Deploy",
+                    "params": [
+                        {"name": "length_m", "type": "number", "label": "Length (m)",
+                         "min": 0, "max": 50, "step": 0.5, "required": True},
+                    ],
+                },
+                {"action": "retract", "label": "Retract", "params": []},
+            ],
+        },
+    ],
+}
+
+
 # ── HubLink server ───────────────────────────────────────────────────────────
 
 class HubLinkService:
-    def __init__(self, telemetry_source, expected_key: str, rate_hz: float, logger, lease_ttl_ms: int = 30000):
+    def __init__(self, telemetry_source, expected_key: str, rate_hz: float, logger, lease_ttl_ms: int = 30000, manifest: dict | None = None):
         self.telemetry_source = telemetry_source
         self.expected_key = expected_key
         self.interval = 1.0 / rate_hz if rate_hz > 0 else 0.1
         self.logger = logger
         self.clients: set = set()
+        self.manifest = manifest if manifest is not None else DEMO_MANIFEST
         # Single-writer control lease (drone is the authority). At most one Hub
         # holds it at a time. lease = {id, hub_id, websocket, expires_at_ms}.
         self.lease_ttl_ms = lease_ttl_ms
@@ -170,8 +217,12 @@ class HubLinkService:
         self.lease = None
 
     async def _handle_control(self, websocket, msg: dict) -> bool:
-        """Handle a control/lease/command frame. Returns True if handled."""
+        """Handle a control/lease/command/manifest frame. Returns True if handled."""
         mtype = msg.get("type")
+
+        if mtype == "get_manifest":
+            await websocket.send(json.dumps({"type": "manifest", "payloads": self.manifest["payloads"]}))
+            return True
 
         if mtype == "lease_acquire":
             hub_id = msg.get("hub_id") or "unknown"
@@ -263,8 +314,10 @@ class HubLinkService:
             await websocket.send(json.dumps({
                 "type": "hello",
                 "protocol": PROTOCOL_VERSION,
-                "services": ["telemetry"],
+                "services": ["telemetry", "control"],
             }))
+            # Advertise the capability manifest (the Hub also requests it on open).
+            await websocket.send(json.dumps({"type": "manifest", "payloads": self.manifest["payloads"]}))
             sender = asyncio.create_task(self._send_loop(websocket))
             receiver = asyncio.create_task(self._recv_loop(websocket))
             done, pending = await asyncio.wait(

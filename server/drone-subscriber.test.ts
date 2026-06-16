@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { interpretDroneFrame, parseDroneFrame, DRONE_STREAM_PROTOCOL_VERSION } from "./droneStreamProtocol";
+import { interpretDroneFrame, parseDroneFrame, normalizeManifest, DRONE_STREAM_PROTOCOL_VERSION } from "./droneStreamProtocol";
 
 // The manager imports ./websocket (Socket.IO) and ./db; stub both so the unit
 // tests stay isolated and never touch sockets or the filesystem. The manager
@@ -9,6 +9,7 @@ vi.mock("./websocket", () => ({
   broadcastCameraStatus: vi.fn(),
   broadcastPointCloud: vi.fn(),
   broadcastControlStatus: vi.fn(),
+  broadcastCapabilities: vi.fn(),
 }));
 vi.mock("./db", () => ({
   getPullDrones: vi.fn().mockResolvedValue([]),
@@ -153,6 +154,59 @@ describe("droneStreamProtocol.interpretDroneFrame", () => {
     expect(interpretDroneFrame("d", JSON.stringify({ type: "command_result", ok: true })).kind).toBe("error");
     expect(interpretDroneFrame("d", JSON.stringify({ type: "command_result", request_id: "x" })).kind).toBe("error");
   });
+
+  // ── Capability manifest (B-next) ──
+
+  it("normalizes a well-formed manifest", () => {
+    const m = normalizeManifest({
+      payloads: [
+        {
+          id: "camera",
+          name: "Cam",
+          commands: [
+            { action: "set_zoom", label: "Zoom", params: [{ name: "level", type: "number", min: 1, max: 10, required: true }] },
+            { action: "start", params: [] },
+          ],
+        },
+      ],
+    });
+    expect(m.payloads).toHaveLength(1);
+    expect(m.payloads[0].name).toBe("Cam");
+    expect(m.payloads[0].commands.map((c) => c.action)).toEqual(["set_zoom", "start"]);
+    expect(m.payloads[0].commands[0].params[0]).toMatchObject({ name: "level", type: "number", min: 1, max: 10, required: true });
+  });
+
+  it("drops malformed payloads/commands/params and defaults unknown param types to string", () => {
+    const m = normalizeManifest({
+      payloads: [
+        { name: "no-id" }, // dropped (no id)
+        {
+          id: "p1",
+          commands: [
+            { label: "no action" }, // dropped (no action)
+            { action: "ok", params: [{ name: "x", type: "weird" }, { type: "noname" }] },
+          ],
+        },
+      ],
+    });
+    expect(m.payloads).toHaveLength(1);
+    expect(m.payloads[0].id).toBe("p1");
+    expect(m.payloads[0].commands).toHaveLength(1);
+    expect(m.payloads[0].commands[0].params).toHaveLength(1); // the nameless param dropped
+    expect(m.payloads[0].commands[0].params[0]).toEqual({ name: "x", type: "string" }); // unknown type → string
+  });
+
+  it("normalizes garbage to an empty manifest", () => {
+    expect(normalizeManifest(null)).toEqual({ payloads: [] });
+    expect(normalizeManifest({ payloads: "nope" })).toEqual({ payloads: [] });
+  });
+
+  it("interpretDroneFrame maps a manifest frame", () => {
+    const d = interpretDroneFrame("d", JSON.stringify({ type: "manifest", payloads: [{ id: "c", commands: [] }] }));
+    expect(d.kind).toBe("manifest");
+    if (d.kind !== "manifest") throw new Error("unreachable");
+    expect(d.manifest.payloads[0].id).toBe("c");
+  });
 });
 
 // ── Manager lifecycle with a fake transport ──────────────────────────────────
@@ -204,6 +258,7 @@ function makeHarness() {
   const setDrones = (d: DroneConnConfig[]) => (drones = d);
 
   const controlEvents: ControlStatus[] = [];
+  const capabilityEvents: { droneId: string; manifest: any }[] = [];
 
   const manager = new DroneSubscriberManager({
     socketFactory: factory,
@@ -216,6 +271,7 @@ function makeHarness() {
     log: () => {},
     hubId: "hub-test",
     onControlChange: (s) => controlEvents.push(s),
+    onCapabilitiesChange: (droneId, manifest) => capabilityEvents.push({ droneId, manifest }),
     acquireTimeoutMs: 5000,
     commandTimeoutMs: 5000,
     leaseTtlDefaultMs: 1000,
@@ -226,7 +282,7 @@ function makeHarness() {
   // Parse the frames a socket has sent (newest first).
   const sentFrames = (s: FakeSocket) => s.sent.map((j) => JSON.parse(j));
 
-  return { manager, sockets, liveSockets, scheduled, runNextScheduled, calls, setDrones, controlEvents, sentFrames };
+  return { manager, sockets, liveSockets, scheduled, runNextScheduled, calls, setDrones, controlEvents, capabilityEvents, sentFrames };
 }
 
 const droneA: DroneConnConfig = { droneId: "A", host: "a.tnet.ts.net", port: 8765, token: "tokA" };
@@ -468,5 +524,88 @@ describe("DroneSubscriberManager control lease", () => {
     const r = await h.manager.acquireControl("ghost");
     expect(r).toEqual({ granted: false, heldBy: null, reason: "not_connected" });
     expect(h.manager.controlStatus("ghost").connected).toBe(false);
+  });
+});
+
+// ── Capability manifest (B-next) ─────────────────────────────────────────────
+
+describe("DroneSubscriberManager capabilities", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  async function openHarness() {
+    const h = makeHarness();
+    h.setDrones([droneA]);
+    await h.manager.start();
+    h.sockets[0].handlers.onOpen();
+    return h;
+  }
+
+  const manifestFrame = {
+    type: "manifest",
+    payloads: [
+      { id: "camera", name: "Cam", commands: [{ action: "set_zoom", params: [{ name: "level", type: "number" }] }] },
+    ],
+  };
+
+  it("requests the manifest on open", async () => {
+    const h = await openHarness();
+    expect(h.sentFrames(h.sockets[0]).some((f) => f.type === "get_manifest")).toBe(true);
+  });
+
+  it("stores the manifest and notifies browsers on a manifest frame", async () => {
+    const h = await openHarness();
+    h.sockets[0].handlers.onMessage(JSON.stringify(manifestFrame));
+    await flush();
+
+    const caps = h.manager.capabilities("A");
+    expect(caps?.payloads[0].id).toBe("camera");
+    expect(caps?.payloads[0].commands[0].action).toBe("set_zoom");
+    expect(h.capabilityEvents.some((e) => e.droneId === "A" && e.manifest.payloads.length === 1)).toBe(true);
+  });
+
+  it("capabilities() is null for an unknown drone", async () => {
+    const h = await openHarness();
+    expect(h.manager.capabilities("nope")).toBeNull();
+  });
+
+  it("rejects unknown actions once a manifest is loaded, but allows known ones", async () => {
+    const h = await openHarness();
+    const s = h.sockets[0];
+    h.sockets[0].handlers.onMessage(JSON.stringify(manifestFrame));
+    await flush();
+
+    // Acquire control first.
+    const ap = h.manager.acquireControl("A");
+    const acquire = h.sentFrames(s).find((f) => f.type === "lease_acquire");
+    s.handlers.onMessage(JSON.stringify({ type: "lease_granted", lease_id: "L1", request_id: acquire.request_id }));
+    await flush();
+    await ap;
+
+    // Unknown action is rejected locally (no command frame sent).
+    const before = h.sentFrames(s).filter((f) => f.type === "command").length;
+    const bad = await h.manager.sendCommand("A", "nonexistent");
+    expect(bad).toEqual({ ok: false, result: null, error: "unknown_action" });
+    expect(h.sentFrames(s).filter((f) => f.type === "command").length).toBe(before);
+
+    // Known action is sent.
+    const cp = h.manager.sendCommand("A", "set_zoom", { level: 2 });
+    const cmd = h.sentFrames(s).find((f) => f.type === "command" && f.action === "set_zoom");
+    expect(cmd).toBeTruthy();
+    s.handlers.onMessage(JSON.stringify({ type: "command_result", request_id: cmd.request_id, ok: true }));
+    await flush();
+    expect((await cp).ok).toBe(true);
+  });
+
+  it("allows any action when no manifest has been advertised", async () => {
+    const h = await openHarness();
+    const s = h.sockets[0];
+    const ap = h.manager.acquireControl("A");
+    const acquire = h.sentFrames(s).find((f) => f.type === "lease_acquire");
+    s.handlers.onMessage(JSON.stringify({ type: "lease_granted", lease_id: "L1", request_id: acquire.request_id }));
+    await flush();
+    await ap;
+
+    h.manager.sendCommand("A", "anything_goes");
+    expect(h.sentFrames(s).some((f) => f.type === "command" && f.action === "anything_goes")).toBe(true);
   });
 });
