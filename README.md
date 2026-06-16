@@ -416,9 +416,15 @@ All configuration is optional — see [`.env.example`](.env.example). Copy it to
 
 `pnpm dev`/`pnpm start` listen on all interfaces, so the Hub is reachable on the
 LAN at `http://<hub-ip>:3000`. For companion computers (drones) to download
-files queued in jobs, set `PUBLIC_BASE_URL` to that reachable address. Remote
-access from outside the LAN (e.g. drones in the field) is intended to run over
-Tailscale — see the companion setup docs.
+files queued in jobs, set `PUBLIC_BASE_URL` to that reachable address.
+
+**Remote access (drones in the field, over 4G).** Drones and Hubs are never on
+the same network in production, so Caribou uses a **Tailscale mesh**: every Hub
+and drone joins one tailnet, the Hub is served over HTTPS via `tailscale serve`,
+and access is scoped per fleet/operator with ACL tags. See
+[docs/architecture/Tailscale_Network_Architecture.md](docs/architecture/Tailscale_Network_Architecture.md)
+for the design and [infra/tailscale/](infra/tailscale/) for the ACL policy and
+setup scripts.
 
 ### Companion Computer Setup
 

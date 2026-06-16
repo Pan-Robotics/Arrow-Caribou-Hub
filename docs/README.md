@@ -9,7 +9,8 @@ This directory contains all architecture documents, pipeline references, and spe
 | Document | Description |
 |---|---|
 | [caribou-hub-architecture.md](architecture/caribou-hub-architecture.md) | Master architecture document — full system overview, all endpoints, database schema, companion scripts, frontend apps, and deployment topology |
-| [Caribou_Camera_Feed_Architecture.md](architecture/Caribou_Camera_Feed_Architecture.md) | Camera feed pipeline — generic multi-stream architecture, go2rtc, Tailscale funnel, WHEP SDP proxy, WebRTC signaling, frontend multi-stream UI |
+| [Tailscale_Network_Architecture.md](architecture/Tailscale_Network_Architecture.md) | Remote-access network design — single-tailnet mesh over 4G, ACL tags/grants for fleets & multi-operator, drone-as-tailnet-service pull model, provisioning, and `infra/tailscale/` scripts |
+| [Caribou_Camera_Feed_Architecture.md](architecture/Caribou_Camera_Feed_Architecture.md) | Camera feed pipeline — generic multi-stream architecture, go2rtc, Tailscale tailnet (Funnel optional), WHEP SDP proxy, WebRTC signaling, frontend multi-stream UI |
 | [flight-analytics-integration-analysis.md](architecture/flight-analytics-integration-analysis.md) | Integration analysis mapping the Flight-Log-Analyser tool to Caribou Hub infrastructure — parser reuse, chart rendering, storage, and implementation phases |
 
 ## Setup Guides

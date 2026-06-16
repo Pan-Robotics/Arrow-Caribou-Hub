@@ -2,25 +2,25 @@
 """
 Caribou Camera Stream Service
 ------------------------------
-Manages go2rtc for a single RTSP camera source, exposes it via Tailscale Funnel,
-and registers the WHEP URL with the Caribou Hub for browser-based WebRTC playback.
+Manages go2rtc for a single RTSP camera source on a drone (Caribou System Unit),
+and registers its WHEP URL with the Caribou Hub for browser-based WebRTC playback.
 
-Architecture:
-  RTSP Camera → go2rtc (local) → Tailscale Funnel (public HTTPS) → Hub WHEP proxy → Browser
+Architecture (default — tailnet-private):
+  RTSP Camera → go2rtc (drone) → [Tailscale tailnet] → Hub WHEP proxy → Browser
+  The Hub reaches go2rtc directly at the drone's MagicDNS name; nothing is public.
+
+Architecture (--funnel — benchtop / no-tailnet Hub only):
+  RTSP Camera → go2rtc → Tailscale Funnel (public HTTPS) → Hub WHEP proxy → Browser
 
 go2rtc handles:
   - RTSP ingest from any camera
   - WebRTC encoding and signaling (WHEP API)
   - ICE/STUN negotiation for peer-to-peer media
 
-Tailscale Funnel handles:
-  - Exposing the go2rtc API to the internet (HTTPS signaling only)
-  - WebRTC media flows peer-to-peer via UDP, not through the funnel
-
 Features:
   - Generic: works with ANY RTSP camera source (no camera-specific code)
   - Manages go2rtc process lifecycle with auto-restart
-  - Auto-detects Tailscale funnel URL
+  - Tailnet-private WHEP registration by default (--funnel for public exposure)
   - Registers WHEP URL with Caribou Hub
   - Health monitoring with stream producer validation
   - 5-minute heartbeat for Hub re-registration
@@ -153,6 +153,33 @@ def get_tailscale_funnel_url(
     return None
 
 
+def get_tailscale_dnsname(max_retries: int = 15, retry_interval: float = 2.0) -> Optional[str]:
+    """
+    Return this node's Tailscale MagicDNS name (e.g. caribou-001.<tailnet>.ts.net),
+    with no scheme/port. Used for tailnet-private stream registration — the Hub
+    reaches go2rtc directly over the tailnet, with no public exposure.
+    """
+    for attempt in range(max_retries):
+        try:
+            result = subprocess.run(
+                ["tailscale", "status", "--json"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                dns_name = json.loads(result.stdout).get("Self", {}).get("DNSName", "").rstrip(".")
+                if dns_name:
+                    return dns_name
+            logger.warning(f"No Tailscale DNSName yet (attempt {attempt + 1}/{max_retries})")
+        except FileNotFoundError:
+            logger.warning("Tailscale not installed — cannot detect MagicDNS name")
+            return None
+        except (json.JSONDecodeError, subprocess.TimeoutExpired) as e:
+            logger.warning(f"Tailscale detection error (attempt {attempt + 1}/{max_retries}): {e}")
+        time.sleep(retry_interval)
+    logger.error(f"Failed to detect Tailscale MagicDNS name after {max_retries} attempts")
+    return None
+
+
 def setup_tailscale_funnel(local_port: int = 1984, funnel_port: int = 443) -> bool:
     """
     Configure Tailscale to serve and funnel go2rtc's API port.
@@ -211,6 +238,7 @@ class WebRTCStreamingService:
         api_key: Optional[str] = None,
         public_url: Optional[str] = None,
         skip_funnel_setup: bool = False,
+        use_funnel: bool = False,
     ):
         self.rtsp_url = rtsp_url
         self.api_port = api_port
@@ -221,6 +249,9 @@ class WebRTCStreamingService:
         self.api_key = api_key
         self.public_url = public_url
         self.skip_funnel_setup = skip_funnel_setup
+        # Default: tailnet-private (register the go2rtc URL on the MagicDNS name,
+        # Hub reaches it over the tailnet). --funnel opts into public Tailscale Funnel.
+        self.use_funnel = use_funnel
 
         # Instance state
         self._stream_registered = False
@@ -302,8 +333,9 @@ class WebRTCStreamingService:
 
     def _detect_webrtc_url(self) -> Optional[str]:
         """
-        Detect the public WHEP URL.
-        Priority: explicit --public-url > Tailscale auto-detect > localhost fallback.
+        Detect the WHEP URL to register with the Hub.
+        Priority: explicit --public-url > (tailnet-private MagicDNS, default) or
+        (public Tailscale Funnel, --funnel) > localhost fallback.
         """
         if self.public_url:
             url = self.public_url.rstrip("/")
@@ -312,14 +344,23 @@ class WebRTCStreamingService:
             logger.info(f"Using explicit public URL: {url}")
             return url
 
-        base = get_tailscale_funnel_url(self.funnel_port)
-        if base:
-            url = f"{base}/api/webrtc?src=camera"
-            logger.info(f"Using Tailscale funnel URL: {url}")
-            return url
+        if self.use_funnel:
+            base = get_tailscale_funnel_url(self.funnel_port)
+            if base:
+                url = f"{base}/api/webrtc?src=camera"
+                logger.info(f"Using public Tailscale funnel URL: {url}")
+                return url
+        else:
+            # Tailnet-private (recommended): the Hub reaches go2rtc directly over
+            # the tailnet at the MagicDNS name; nothing is exposed publicly.
+            dnsname = get_tailscale_dnsname()
+            if dnsname:
+                url = f"http://{dnsname}:{self.api_port}/api/webrtc?src=camera"
+                logger.info(f"Using tailnet-private WHEP URL: {url}")
+                return url
 
         # Fallback: LAN-only
-        logger.warning("No public URL available — using localhost (LAN only)")
+        logger.warning("No Tailscale URL available — using localhost (LAN only)")
         return f"http://localhost:{self.api_port}/api/webrtc?src=camera"
 
     def _register_stream_with_hub(self, webrtc_url: str) -> bool:
@@ -386,8 +427,10 @@ class WebRTCStreamingService:
             logger.info(f"  Hub URL: {self.hub_url}")
             logger.info(f"  Drone ID: {self.drone_id}")
 
-        # Set up Tailscale funnel if not skipped
-        if not self.skip_funnel_setup:
+        # Set up public Tailscale Funnel only when explicitly requested (--funnel).
+        # Tailnet-private mode needs no serve/funnel — the Hub reaches go2rtc over
+        # the tailnet directly.
+        if self.use_funnel and not self.skip_funnel_setup:
             setup_tailscale_funnel(self.api_port, self.funnel_port)
 
         while self.running:
@@ -509,6 +552,11 @@ def parse_args():
         "--skip-funnel-setup", action="store_true",
         help="Skip tailscale serve/funnel commands (use if already configured externally)",
     )
+    parser.add_argument(
+        "--funnel", action="store_true",
+        help="Expose go2rtc via PUBLIC Tailscale Funnel instead of the default "
+             "tailnet-private MagicDNS registration (use only for benchtop/no-tailnet Hubs)",
+    )
     return parser.parse_args()
 
 
@@ -532,6 +580,7 @@ def main():
         api_key=api_key,
         public_url=args.public_url,
         skip_funnel_setup=args.skip_funnel_setup,
+        use_funnel=args.funnel,
     )
 
     setup_signal_handlers(service)
