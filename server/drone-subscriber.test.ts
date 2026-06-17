@@ -367,6 +367,35 @@ describe("DroneSubscriberManager", () => {
     expect(h.sockets).toHaveLength(2); // new socket created on reconnect
   });
 
+  it("schedules a reconnect when the socket errors before opening (no close follows)", async () => {
+    // Regression: undici can fire `error` without a following `close` for a
+    // failure during the opening handshake. The connection must not park.
+    const h = makeHarness();
+    h.setDrones([droneA]);
+    await h.manager.start();
+    const s = h.sockets[0];
+
+    // Error with NO subsequent onClose (the parking failure mode).
+    s.handlers.onError(new Error("handshake failed"));
+    expect(h.scheduled.some((t) => !t.cancelled)).toBe(true);
+
+    expect(h.runNextScheduled()).toBe(true);
+    expect(h.sockets).toHaveLength(2); // reconnected rather than parked
+  });
+
+  it("dedupes a coincident error+close into a single reconnect attempt", async () => {
+    const h = makeHarness();
+    h.setDrones([droneA]);
+    await h.manager.start();
+    const s = h.sockets[0];
+
+    s.handlers.onError(new Error("boom"));
+    s.handlers.onClose(1006, "after error");
+
+    // Both paths funnel through failAttempt, but only one reconnect is counted.
+    expect(h.manager.status()[0].reconnectAttempts).toBe(1);
+  });
+
   it("does not reconnect after an explicit stop()", async () => {
     const h = makeHarness();
     h.setDrones([droneA]);

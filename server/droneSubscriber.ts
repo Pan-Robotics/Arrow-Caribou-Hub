@@ -233,6 +233,9 @@ class DroneStreamConnection {
   private reconnectTimer: { cancel: () => void } | null = null;
   private heartbeatTimer: { cancel: () => void } | null = null;
   private stopped = false;
+  // True once the current socket attempt's failure has been handled, so a
+  // coincident error+close pair only schedules one reconnect. Reset per attempt.
+  private attemptSettled = false;
 
   // ── Control lease (Phase B2) ──
   private controlState: ControlState = "none";
@@ -318,6 +321,7 @@ class DroneStreamConnection {
 
   private open() {
     if (this.stopped) return;
+    this.attemptSettled = false;
     this.state = this.reconnectAttempts === 0 ? "connecting" : "reconnecting";
     const protocols = [STREAM_SUBPROTOCOL, `bearer.${this.config.token}`];
     try {
@@ -328,8 +332,8 @@ class DroneStreamConnection {
         onError: (err) => this.handleError(err),
       });
     } catch (err) {
+      // Synchronous factory failure — handleError drives the reconnect.
       this.handleError(err);
-      this.scheduleReconnect();
     }
   }
 
@@ -568,6 +572,18 @@ class DroneStreamConnection {
   }
 
   private handleClose(code: number, reason: string) {
+    this.failAttempt(code, reason);
+  }
+
+  /**
+   * Settle a failed/closed socket and schedule a reconnect. Idempotent within one
+   * socket attempt: a WS failure can surface as `error` then `close` (or, during
+   * the opening handshake on undici, as `error` with no `close` at all), and both
+   * paths funnel here — the `attemptSettled` guard ensures exactly one reconnect.
+   */
+  private failAttempt(code: number, reason: string) {
+    if (this.attemptSettled) return;
+    this.attemptSettled = true;
     this.stopHeartbeat();
     this.failPendingControl("disconnected");
     this.socket = null;
@@ -598,6 +614,19 @@ class DroneStreamConnection {
 
   private handleError(err: unknown) {
     this.lastError = err instanceof Error ? err.message : String((err as any)?.message ?? err);
+    if (this.stopped) return;
+    // A WebSocket "error" event always signals connection failure. The browser/
+    // undici spec is meant to follow it with a "close", but undici does NOT
+    // reliably emit `close` for failures during the opening handshake — which
+    // would otherwise leave this connection parked in "connecting" forever with
+    // no backoff retry. Drive the failure path directly; failAttempt() dedupes
+    // if a real "close" does follow.
+    try {
+      this.socket?.close();
+    } catch {
+      /* already closing/closed */
+    }
+    this.failAttempt(1006, "error");
   }
 
   private scheduleReconnect() {
