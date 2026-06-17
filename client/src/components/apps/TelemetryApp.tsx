@@ -113,8 +113,9 @@ export default function TelemetryApp() {
     };
   }, [selectedDrone]);
 
-  // Derive arm data from telemetry (or generate demo data from available battery info)
-  const armData: ArmData[] = telemetry?.arms ?? derivedArmData(telemetry);
+  // Normalize whatever per-arm shape the companion sends into flat ArmData[]
+  // (handles the nested HubLink shape, already-flat data, or none).
+  const armData: ArmData[] = toArmData(telemetry);
 
   const formatTimestamp = (timestamp: string | null) => {
     if (!timestamp) return 'N/A';
@@ -499,6 +500,35 @@ export default function TelemetryApp() {
  * This allows the structural view to render meaningfully even before
  * the companion computer sends full per-arm telemetry.
  */
+/**
+ * Build a complete, render-safe ArmData[] from whatever per-arm shape the
+ * companion sends. Companions may send the nested HubLink shape
+ * ({ arm_id, bms: {...}, esc: {...} }), an already-flat ArmData, or nothing.
+ * When arms are present, real fields are mapped and anything missing defaults to
+ * 0 (honest "no reading"); when absent, fall back to derived/demo values. Every
+ * field is a finite number so the structural view can never crash.
+ */
+function toArmData(telemetry: TelemetryData | null): ArmData[] {
+  const raw = telemetry?.arms as unknown as Array<Record<string, any>> | undefined;
+  if (!Array.isArray(raw) || raw.length === 0) return derivedArmData(telemetry);
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return Array.from({ length: 6 }, (_, i) => {
+    const a = raw[i] ?? {};
+    const esc = (a.esc ?? {}) as Record<string, any>;
+    const bms = (a.bms ?? {}) as Record<string, any>;
+    return {
+      motorId: num(a.motorId ?? a.arm_id) || i + 1,
+      rpm: num(a.rpm ?? esc.rpm),
+      motor_temp_c: num(a.motor_temp_c ?? esc.motor_temp_c ?? esc.temperature_c),
+      esc_temp_c: num(a.esc_temp_c ?? esc.temperature_c),
+      esc_voltage_v: num(a.esc_voltage_v ?? esc.voltage_v),
+      esc_current_a: num(a.esc_current_a ?? esc.current_a),
+      bat_temp_c: num(a.bat_temp_c ?? bms.temperature_c),
+      bat_soc_pct: num(a.bat_soc_pct ?? bms.soc_pct),
+    };
+  });
+}
+
 function derivedArmData(telemetry: TelemetryData | null): ArmData[] {
   if (!telemetry) {
     // Return demo data so the structural view is always visible

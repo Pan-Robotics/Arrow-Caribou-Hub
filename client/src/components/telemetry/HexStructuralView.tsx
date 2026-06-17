@@ -27,10 +27,30 @@ interface HexStructuralViewProps {
  *   M1 = top-left corner, M2 = top-right corner, M3 = right (straight),
  *   M4 = bottom-right corner, M5 = bottom-left corner, M6 = left (straight)
  */
-export function HexStructuralView({ arms, className = '' }: HexStructuralViewProps) {
+export function HexStructuralView({ arms: armsProp, className = '' }: HexStructuralViewProps) {
   const cx = 600;
   const cy = 500;
   const armLength = 306;  // 360 * 0.85 = 306 (15% smaller)
+
+  // Defensive: never trust the caller to supply 6 complete, numeric arms.
+  // Partial/odd companion telemetry must not crash the ground station — coerce
+  // every field to a finite number so all downstream `.toFixed()` calls are safe.
+  const arms = useMemo<ArmData[]>(() => {
+    const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    return Array.from({ length: 6 }, (_, i) => {
+      const a = (armsProp?.[i] ?? {}) as Partial<ArmData>;
+      return {
+        motorId: n(a.motorId) || i + 1,
+        rpm: n(a.rpm),
+        motor_temp_c: n(a.motor_temp_c),
+        esc_temp_c: n(a.esc_temp_c),
+        esc_voltage_v: n(a.esc_voltage_v),
+        esc_current_a: n(a.esc_current_a),
+        bat_temp_c: n(a.bat_temp_c),
+        bat_soc_pct: n(a.bat_soc_pct),
+      };
+    });
+  }, [armsProp]);
 
   // Motor angles — clockwise from top-left
   const armAngles = useMemo(() => [
