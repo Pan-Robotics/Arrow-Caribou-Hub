@@ -400,6 +400,37 @@ pnpm start
 This bundles the client and server into `dist/` and serves the built assets
 from the same Express process.
 
+### Run as a desktop app (one click)
+
+To launch the Hub like a desktop application — one click boots the local server
+and opens it in your browser — install the desktop launcher:
+
+```bash
+pnpm app:install     # builds once, then adds "Caribou Hub" to your app launcher
+```
+
+Now open your app launcher/search, type **Caribou Hub**, and click it: the server
+starts (detached, production mode on port 3000) and your browser opens to it. A
+matching **Caribou Hub (Stop)** entry shuts it down. Clicking the launcher again
+while it's running just re-opens the browser (it won't start a second copy).
+
+Equivalent commands (any platform — macOS/Windows have no `.desktop`, use these):
+
+```bash
+pnpm app        # build-if-needed, start the server, open the browser
+pnpm app:stop   # stop the running instance
+```
+
+Behavior/notes:
+
+- Uses a Chromium/Chrome **app window** if one is installed (looks native),
+  otherwise opens your default browser via `xdg-open`.
+- Port via `CARIBOU_PORT` (default `3000`); set `CARIBOU_NO_BROWSER=1` to start
+  headless. Logs go to `data/hub.log`, pid to `data/hub.pid`.
+- This runs the **production** build and shares `./data` with it. Don't run it at
+  the same time as `pnpm dev` against the same data directory (two instances would
+  both write the DB and both pull the same drones).
+
 ### Environment Variables
 
 All configuration is optional — see [`.env.example`](.env.example). Copy it to
