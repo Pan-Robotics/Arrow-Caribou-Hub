@@ -1,0 +1,47 @@
+name: Release
+
+# Build a distributable Caribou Hub package and publish it as a GitHub Release.
+# Trigger by pushing a version tag, e.g.:
+#   git tag v1.0.0 && git push origin v1.0.0
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck + tests
+        run: |
+          pnpm check
+          pnpm test
+
+      - name: Build release package
+        run: pnpm package
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release/*.tar.gz \
+            --title "Caribou Hub ${GITHUB_REF_NAME}" \
+            --generate-notes

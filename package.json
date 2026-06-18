@@ -10,6 +10,7 @@
     "app": "node scripts/launch.mjs",
     "app:stop": "node scripts/stop.mjs",
     "app:install": "node scripts/install-desktop.mjs",
+    "package": "node scripts/package-release.mjs",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",

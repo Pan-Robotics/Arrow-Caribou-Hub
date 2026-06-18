@@ -33,11 +33,21 @@ function log(msg) {
   console.log(`[launch] ${msg}`);
 }
 
+/** Logo path — works from source (client/public) or a built/released tree (dist/public). */
+function iconPath() {
+  for (const p of ["client/public/caribou-logo.png", "dist/public/caribou-logo.png"]) {
+    const abs = path.join(repoRoot, p);
+    if (fs.existsSync(abs)) return abs;
+  }
+  return "";
+}
+
 /** Best-effort desktop notification (no-op if notify-send is absent). */
 function notify(title, body = "") {
   if (process.platform !== "linux") return;
   try {
-    spawnSync("notify-send", ["-a", "Caribou Hub", "-i", path.join(repoRoot, "client/public/caribou-logo.png"), title, body], {
+    const icon = iconPath();
+    spawnSync("notify-send", ["-a", "Caribou Hub", ...(icon ? ["-i", icon] : []), title, body], {
       stdio: "ignore",
     });
   } catch {

@@ -23,9 +23,13 @@ if (process.platform !== "linux") {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const node = process.execPath;
-const icon = path.join(repoRoot, "client", "public", "caribou-logo.png");
 const appsDir = path.join(os.homedir(), ".local", "share", "applications");
 const serverEntry = path.join(repoRoot, "dist", "index.js");
+// Logo from source (client/public) or a built/released tree (dist/public).
+const icon =
+  [path.join(repoRoot, "client/public/caribou-logo.png"), path.join(repoRoot, "dist/public/caribou-logo.png")].find(
+    (p) => fs.existsSync(p)
+  ) || "";
 
 // Build once so clicking the launcher never has to (and never needs pnpm on PATH).
 if (!fs.existsSync(serverEntry)) {

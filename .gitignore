@@ -116,3 +116,6 @@ data/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Release artifacts (built by scripts/package-release.mjs)
+release/

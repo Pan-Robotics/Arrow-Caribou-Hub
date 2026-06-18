@@ -6,9 +6,43 @@ Caribou Hub is a local-first, self-contained ground station for managing unmanne
 
 ---
 
+## Download & Install
+
+**Packaged releases** are published on the repository's
+[**Releases**](../../releases) page (built and attached automatically when a
+`v*` tag is pushed — see [`.github/workflows/release.yml`](.github/workflows/release.yml)).
+
+```bash
+# 1. Download caribou-hub-<version>.tar.gz from the Releases page, then:
+tar xzf caribou-hub-<version>.tar.gz && cd caribou-hub-<version>
+
+# 2. Install runtime dependencies (compiles the native SQLite driver for your machine)
+pnpm install --prod
+
+# 3a. Linux — install a clickable desktop launcher, then click "Caribou Hub"
+pnpm app:install
+# 3b. Or, any platform — start the server and open it in your browser
+pnpm app
+```
+
+A release tarball is the prebuilt app (`dist/`), the DB migrations, and the
+launcher scripts — no cloud account, no database server. First run creates
+`./data` (embedded SQLite + file storage) and serves on http://localhost:3000.
+Prerequisites: **Node.js 22+** and **pnpm**. To build a release locally, run
+`pnpm package` (writes `release/caribou-hub-<version>.tar.gz`).
+
+For development from source, see [Getting Started](#getting-started).
+
+---
+
 ## Architecture
 
-The system consists of three tiers: the browser-based frontend, the Node.js server, and one or more companion computers (typically Raspberry Pi units mounted on drones). The browser communicates with the server via tRPC over HTTP for CRUD operations and Socket.IO over WebSocket for real-time data. Companion computers push sensor data to REST endpoints, poll a job queue for reverse commands, and maintain persistent Socket.IO connections for bidirectional streaming.
+The system consists of three tiers: the browser-based frontend, the Node.js server, and one or more companion computers (typically Raspberry Pi units mounted on drones). The browser communicates with the server via tRPC over HTTP for CRUD operations and Socket.IO over WebSocket for real-time data.
+
+The drone data plane runs in one of two per-drone modes (the Hub re-broadcasts either to browsers over Socket.IO identically):
+
+- **Push** (default, benchtop/LAN): companion computers `POST` sensor data to REST endpoints, poll a job queue for reverse commands, and hold a Socket.IO connection for streaming.
+- **Pull** (Tailscale fleets over 4G): each drone runs a small WebSocket service and the Hub opens an **outbound** connection to it, pulling telemetry and — when it holds the single-writer **control lease** — sending commands. See [docs/architecture/Caribou_Drone_Stream_Protocol.md](docs/architecture/Caribou_Drone_Stream_Protocol.md).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -495,6 +529,9 @@ Each installer prompts for the Hub URL, drone ID, API key, and service-specific 
 | App Management & Versioning | **Implemented** |
 | REST API (Pi integration) | **Implemented** |
 | Drone Job Queue (Hub → Pi) | **Implemented** |
+| Remote access over Tailscale (push + pull data plane) | **Implemented** |
+| Single-writer control lease + per-payload command manifest | **Implemented** |
+| One-click desktop launcher + packaged releases | **Implemented** |
 | Mission Planner | **Planned** |
 
 ---

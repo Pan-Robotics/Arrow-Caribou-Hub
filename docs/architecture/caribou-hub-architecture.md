@@ -285,7 +285,7 @@ The database uses 15 tables organized around five domains: user management, dron
 | Table | Purpose | Key Fields |
 |---|---|---|
 | `users` | Local operator account | openId, name, email, role (user / admin) |
-| `drones` | Registered drone inventory | droneId, name, lastSeen, isActive |
+| `drones` | Registered drone inventory | droneId, name, lastSeen, isActive, ingestMode (push / pull), tailnetHost, streamPort |
 | `apiKeys` | Per-drone authentication keys | key, droneId, description, isActive |
 | `scans` | Point cloud scan metadata | droneId, timestamp, pointCount, min/max distance, avgQuality |
 | `telemetry` | Flight telemetry snapshots | droneId, timestamp, telemetryData (JSON) |
@@ -345,6 +345,28 @@ A polling-based job queue enables the Hub to push tasks to the companion compute
 
 Both `raspberry_pi_client.py` and `logs_ota_service.py` poll `droneJobs.getPendingJobs` at regular intervals, acknowledge each job, execute it, and report completion or failure back to the Hub.
 
+### 6.3 Remote data plane — Tailscale pull mode
+
+§6.1–6.2 describe the **push** model (companion → Hub REST + job queue), the
+default for benchtop/LAN. For fleets in the field — where drones and Hubs are on
+different networks (4G/CGNAT) — Caribou inverts this with a **pull** data plane
+over a Tailscale mesh. Each drone's `drones.ingestMode` selects the model
+(`push` default / `pull`); both coexist and re-broadcast to browsers identically.
+
+In pull mode the **drone is a tailnet service and the Hub is the client**:
+
+| Concern | Mechanism |
+|---|---|
+| Transport | Drone runs a WebSocket service (`companion_scripts/hublink_service.py` reference; `HubLink.py` on the System Unit); the Hub opens an outbound connection per managed drone (`server/droneSubscriber.ts`) and feeds the same `broadcast*` + persistence path as REST ingest |
+| Auth | Per-drone API key carried in the WS subprotocol (`bearer.<key>`); reachability gated by Tailscale ACLs |
+| Telemetry | Same payload shape as `/telemetry/ingest`; `drone_id` injected from the connection |
+| Control | Single-writer **control lease** (drone-arbitrated, TTL + heartbeat, auto-revoke on disconnect); only the lease holder's commands execute. tRPC `drones.acquireControl` / `releaseControl` / `sendCommand` / `controlStatus`; live status over the `control:<droneId>` Socket.IO room |
+| Capabilities | Drones advertise a per-payload **capability manifest** (typed commands) the UI renders as forms; tRPC `drones.capabilities`, `capabilities:<droneId>` room |
+| Config | Drone Configuration → **Data Plane & Control** card, or `drones.setConnection` |
+
+Full wire contract: [Caribou_Drone_Stream_Protocol.md](Caribou_Drone_Stream_Protocol.md).
+Network design (topology, ACL tags/grants, provisioning): [Tailscale_Network_Architecture.md](Tailscale_Network_Architecture.md).
+
 ---
 
 ## 7. Client-Side Architecture
@@ -402,6 +424,10 @@ Authentication operates on two separate planes. **User authentication** is local
 | REST API (Pi Integration) | **Implemented** | Point cloud, telemetry, camera, custom payload, and flight log endpoints |
 | Drone Job Queue | **Implemented** | Two-way Hub-to-Pi communication with file delivery |
 | Logs & OTA Updates | **Implemented** | FC log scan/download (HTTP primary, MAVFTP fallback), OTA firmware flash (Approach C: FC HTTP pull + version verification), system diagnostics, remote log streaming, Send to Flight Analytics |
+| Remote access (Tailscale) | **Implemented** | Single-tailnet mesh, ACL tags/grants per fleet/operator, `tailscale serve` for the Hub UI; infra in [infra/tailscale/](../../infra/tailscale/) (tailnet provisioning is operator-run) |
+| Pull data plane | **Implemented** | Hub-side outbound subscriber, single-writer control lease, per-payload capability manifest (§6.3); drone-side `HubLink.py` lands with System Unit V1 |
+| Desktop launcher | **Implemented** | One-click `.desktop` launcher boots the server and opens the browser (`pnpm app:install`); `pnpm app` / `app:stop` cross-platform |
+| Packaged releases | **Implemented** | `pnpm package` + tag-triggered GitHub Release workflow attach a runnable tarball |
 | Mission Planner | **Indicated** | Placeholder UI present; Leaflet/OpenStreetMap map component available in codebase |
 | Crosshair Sync | **Indicated** | Hover-linked cursors across Flight Analytics charts |
 | PARM Table View | **Indicated** | Searchable ArduPilot parameter table from DataFlash logs |
