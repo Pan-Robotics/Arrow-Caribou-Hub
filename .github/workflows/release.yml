@@ -42,6 +42,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Target the exact tagged commit (e.g. on dev), never the default branch.
           gh release create "${GITHUB_REF_NAME}" release/*.tar.gz \
+            --target "${GITHUB_SHA}" \
             --title "Caribou Hub ${GITHUB_REF_NAME}" \
             --generate-notes
