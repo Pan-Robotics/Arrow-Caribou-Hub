@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 /**
- * Stop a Caribou Hub instance started by scripts/launch.mjs.
- * Kills the pid recorded in data/hub.pid (and any process on the configured port
- * as a fallback). Safe to run when nothing is running.
+ * Stop a running Caribou Hub for this project.
+ *
+ * Finds the Hub however it was started — the desktop launcher, `pnpm app`,
+ * `pnpm start`, or `pnpm dev` — and on whatever port, then SIGTERMs it. Scoped to
+ * THIS repo (by process working directory) so it never touches unrelated Node
+ * processes. Safe to run when nothing is running.
+ *
+ * Wired to the "Caribou Hub (Stop)" desktop entry and `pnpm app:stop`.
  */
 
 import { spawnSync } from "node:child_process";
@@ -23,18 +28,33 @@ function notify(body) {
   }
 }
 
-let stopped = false;
+function sh(cmd) {
+  const res = spawnSync("bash", ["-lc", cmd], { encoding: "utf8" });
+  return (res.stdout || "")
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
-// 1) pid file
+/** Does this pid belong to a process running out of this repo? */
+function cwdIsRepo(pid) {
+  try {
+    return fs.readlinkSync(`/proc/${pid}/cwd`) === repoRoot; // Linux
+  } catch {
+    // No /proc (macOS) or no permission — fall back to lsof if available.
+    const dirs = sh(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'`);
+    return dirs.includes(repoRoot);
+  }
+}
+
+const targets = new Set();
+
+// 1) pid file written by the launcher.
 try {
   const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
-  if (pid) {
-    process.kill(pid, "SIGTERM");
-    console.log(`[stop] sent SIGTERM to pid ${pid}`);
-    stopped = true;
-  }
+  if (pid) targets.add(pid);
 } catch {
-  /* no pid file / already gone */
+  /* no pid file */
 }
 try {
   fs.rmSync(pidFile, { force: true });
@@ -42,22 +62,35 @@ try {
   /* ignore */
 }
 
-// 2) fallback: anything still bound to the port (covers an auto-bumped/orphaned run)
 if (process.platform !== "win32") {
-  const res = spawnSync("bash", ["-lc", `lsof -ti tcp:${PORT} 2>/dev/null || ss -ltnp 2>/dev/null | grep ":${PORT} " | grep -oP 'pid=\\K[0-9]+'`], {
-    encoding: "utf8",
-  });
-  const pids = (res.stdout || "").split(/\s+/).map((s) => s.trim()).filter(Boolean);
-  for (const p of pids) {
-    try {
-      process.kill(Number(p), "SIGTERM");
-      console.log(`[stop] sent SIGTERM to pid ${p} (port :${PORT})`);
-      stopped = true;
-    } catch {
-      /* ignore */
-    }
+  // 2) Any Node/tsx process running THIS repo's server entry — covers prod
+  //    (dist/index.js) and dev (tsx … server/_core/index.ts), on any port,
+  //    however it was started. Scope to this repo via the process cwd. The
+  //    [d]/[s] bracket trick keeps pgrep's own command line from self-matching.
+  for (const p of sh("pgrep -f '[d]ist/index.js|[s]erver/_core/index.ts' 2>/dev/null || true")) {
+    const pid = Number(p);
+    if (pid && pid !== process.pid && cwdIsRepo(pid)) targets.add(pid);
+  }
+
+  // 3) Belt-and-braces: whatever is bound to the configured port.
+  for (const p of sh(
+    `lsof -ti tcp:${PORT} 2>/dev/null || ss -ltnp 2>/dev/null | grep ":${PORT} " | grep -oP 'pid=\\K[0-9]+'`
+  )) {
+    const pid = Number(p);
+    if (pid && pid !== process.pid) targets.add(pid);
   }
 }
 
-console.log(stopped ? "[stop] Caribou Hub stopped." : "[stop] nothing to stop.");
+let stopped = 0;
+for (const pid of targets) {
+  try {
+    process.kill(pid, "SIGTERM");
+    console.log(`[stop] SIGTERM ${pid}`);
+    stopped++;
+  } catch {
+    /* already gone */
+  }
+}
+
+console.log(stopped ? `[stop] Caribou Hub stopped (${stopped} process${stopped > 1 ? "es" : ""}).` : "[stop] nothing to stop.");
 notify(stopped ? "Stopped." : "Was not running.");

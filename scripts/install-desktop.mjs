@@ -49,6 +49,12 @@ fs.mkdirSync(appsDir, { recursive: true });
 const execArg = (s) => `"${s.replace(/(["$`\\])/g, "\\$1")}"`;
 const execLine = (...args) => args.map(execArg).join(" ");
 
+// Optionally bake a fixed port into the launcher entries, e.g.:
+//   CARIBOU_PORT=3005 pnpm app:install
+// (matches a drone configured to reach the Hub on that port). Numeric only.
+const bakedPort = (process.env.CARIBOU_PORT || "").trim();
+const envPrefix = /^\d+$/.test(bakedPort) ? `env CARIBOU_PORT=${bakedPort} ` : "";
+
 function writeDesktop(filename, fields) {
   const body =
     "[Desktop Entry]\n" +
@@ -65,7 +71,7 @@ const start = writeDesktop("caribou-hub.desktop", {
   Type: "Application",
   Name: "Caribou Hub",
   Comment: "Project Caribou ground station — boots the local server and opens it in your browser",
-  Exec: execLine(node, path.join(repoRoot, "scripts", "launch.mjs")),
+  Exec: envPrefix + execLine(node, path.join(repoRoot, "scripts", "launch.mjs")),
   Icon: icon,
   Terminal: "false",
   Categories: "Utility;",
@@ -77,7 +83,7 @@ const stop = writeDesktop("caribou-hub-stop.desktop", {
   Type: "Application",
   Name: "Caribou Hub (Stop)",
   Comment: "Stop the running Caribou Hub server",
-  Exec: execLine(node, path.join(repoRoot, "scripts", "stop.mjs")),
+  Exec: envPrefix + execLine(node, path.join(repoRoot, "scripts", "stop.mjs")),
   Icon: icon,
   Terminal: "false",
   Categories: "Utility;",
@@ -90,6 +96,7 @@ spawnSync("update-desktop-database", [appsDir], { stdio: "ignore" });
 console.log("[install] Installed desktop launchers:");
 console.log(`  • ${start}`);
 console.log(`  • ${stop}`);
+console.log(`  • port: ${bakedPort && /^\d+$/.test(bakedPort) ? bakedPort : "3000 (launcher default)"}`);
 console.log("");
 console.log('Open your app launcher and search "Caribou Hub" — click it to start + open in the browser.');
 console.log("Tip: to also drop it on your Desktop:");
