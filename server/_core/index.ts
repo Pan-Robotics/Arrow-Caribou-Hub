@@ -72,8 +72,12 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+  // Bind all interfaces (not just loopback) so companion computers can reach the
+  // Hub's REST/tRPC/Socket.IO over the LAN or tailnet. Override with HOST if you
+  // need to restrict it (e.g. HOST=127.0.0.1).
+  const host = process.env.HOST || "0.0.0.0";
+  server.listen(port, host, () => {
+    console.log(`Server running on http://localhost:${port}/ (listening on ${host}:${port})`);
     // Start the job reliability reaper (runs every 60s)
     startJobReaper(60_000);
     // Start the outbound "pull" data plane for any drones in pull mode
