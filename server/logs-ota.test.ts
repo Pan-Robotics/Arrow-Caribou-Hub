@@ -352,16 +352,30 @@ describe("Logs & OTA Updates - Frontend Component", () => {
     expect(source).toContain("CPU Temp");
   });
 
-  it("has remote log streaming with service selector", () => {
+  it("has remote log streaming with a service selector", () => {
+    // The dropdown is no longer hard-coded; it derives from the drone's
+    // diagnostics.services payload so adding a service on the Pi just
+    // shows up in the UI. So we test the WIRING, not specific names.
     expect(source).toContain("log_stream_request");
-    expect(source).toContain("logs-ota");
-    expect(source).toContain("camera-stream");
-    expect(source).toContain("telemetry-forwarder");
-    expect(source).toContain("caribou-hub-client");
+    expect(source).toContain("trpc.diagnostics.latest.useQuery");
+    expect(source).toContain("Object.keys(raw)");
+    // The Pi forwards the dropdown's own log stream; logs-ota is the
+    // sensible default selection once services arrive.
+    expect(source).toContain('"logs-ota"');
   });
 
-  it("no longer offers the obsolete siyi-camera log source", () => {
+  it("no longer hard-codes Quiver-era service names in the dropdown", () => {
+    // These were in the old hard-coded list; the new dynamic dropdown
+    // relies on whatever the drone actually reports, so the file body
+    // should not reference these obsolete names any more.
+    expect(source).not.toContain("telemetry-forwarder");
+    expect(source).not.toContain("caribou-hub-client");
     expect(source).not.toContain("siyi-camera");
+  });
+
+  it("handles the no-diagnostics-yet state in the service dropdown", () => {
+    expect(source).toContain("Waiting for drone diagnostics");
+    expect(source).toContain("disabled={services.length === 0}");
   });
 
   it("shows connection status badge", () => {

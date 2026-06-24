@@ -1159,18 +1159,55 @@ function RemoteLogsTab({
   droneId: string;
   socket: Socket | null;
 }) {
-  const [selectedService, setSelectedService] = useState("logs-ota");
+  const [selectedService, setSelectedService] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const services = [
-    { value: "telemetry-forwarder", label: "Telemetry Forwarder" },
-    { value: "logs-ota", label: "Logs & OTA" },
-    { value: "camera-stream", label: "Camera Stream" },
-    { value: "caribou-hub-client", label: "Hub Client" },
-  ];
+  // Populate the dropdown from whichever systemd units the drone's
+  // diagnostics payload actually reports — so adding a service on the Pi
+  // (csu, caribou-can, go2rtc, custom payload, etc.) lights up here
+  // automatically on the next 10 s diagnostics tick. No more hard-coded
+  // service list to maintain.
+  const { data: latestDiag } = trpc.diagnostics.latest.useQuery(
+    { droneId },
+    { refetchInterval: 15000 }
+  );
+
+  const services = useMemo(() => {
+    const raw = (latestDiag as any)?.services as
+      | Record<string, string>
+      | undefined;
+    if (!raw) return [];
+    return Object.keys(raw)
+      .sort()
+      .map((name) => ({ value: name, label: name }));
+  }, [latestDiag]);
+
+  // Default the selection once services arrive; prefer logs-ota since that's
+  // what's forwarding this stream in the first place.
+  useEffect(() => {
+    if (selectedService === "" && services.length > 0) {
+      setSelectedService(
+        services.find((s) => s.value === "logs-ota")?.value ?? services[0].value
+      );
+    }
+  }, [services, selectedService]);
+
+  // If the currently-selected service disappears from a later diagnostics
+  // tick (operator stopped it, drone uninstalled it, etc.), fall back to
+  // whatever is still being reported so the UI doesn't pretend it's
+  // streamable.
+  useEffect(() => {
+    if (
+      selectedService !== "" &&
+      services.length > 0 &&
+      !services.some((s) => s.value === selectedService)
+    ) {
+      setSelectedService(services[0].value);
+    }
+  }, [services, selectedService]);
 
   // Listen for log stream events
   useEffect(() => {
@@ -1245,9 +1282,19 @@ function RemoteLogsTab({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={selectedService} onValueChange={handleServiceChange}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue />
+          <Select
+            value={selectedService}
+            onValueChange={handleServiceChange}
+            disabled={services.length === 0}
+          >
+            <SelectTrigger className="w-[220px]">
+              <SelectValue
+                placeholder={
+                  services.length === 0
+                    ? "Waiting for drone diagnostics…"
+                    : "Select service"
+                }
+              />
             </SelectTrigger>
             <SelectContent>
               {services.map((svc) => (
@@ -1264,7 +1311,12 @@ function RemoteLogsTab({
               Stop
             </Button>
           ) : (
-            <Button onClick={startStream} size="sm" className="gap-1">
+            <Button
+              onClick={startStream}
+              size="sm"
+              className="gap-1"
+              disabled={!selectedService}
+            >
               <Play size={14} />
               Stream
             </Button>
