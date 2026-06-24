@@ -63,6 +63,7 @@ interface TelemetryData {
   // Extended flight data
   airspeed_ms?: number;
   vertical_speed_ms?: number;
+  heading_deg?: number;
   flight_mode?: string;
 }
 
@@ -116,6 +117,11 @@ export default function TelemetryApp() {
   // Normalize whatever per-arm shape the companion sends into flat ArmData[]
   // (handles the nested HubLink shape, already-flat data, or none).
   const armData: ArmData[] = toArmData(telemetry);
+
+  // Cockpit battery SoC = average of the 6 per-arm packs (matches the structural view).
+  const avgBatterySoc = armData.length
+    ? armData.reduce((sum, a) => sum + a.bat_soc_pct, 0) / armData.length
+    : undefined;
 
   const formatTimestamp = (timestamp: string | null) => {
     if (!timestamp) return 'N/A';
@@ -206,7 +212,9 @@ export default function TelemetryApp() {
                 position={telemetry?.position ?? null}
                 gps={telemetry?.gps ?? null}
                 battery_fc={telemetry?.battery_fc ?? null}
+                batterySoc={avgBatterySoc}
                 in_air={telemetry?.in_air ?? false}
+                heading={telemetry?.heading_deg}
                 airspeed_ms={telemetry?.airspeed_ms ?? 0}
                 vertical_speed_ms={telemetry?.vertical_speed_ms ?? 0}
                 flight_mode={telemetry?.flight_mode ?? 'STABILIZE'}
@@ -243,7 +251,7 @@ export default function TelemetryApp() {
                         <Navigation className="h-5 w-5" />
                         Attitude
                       </CardTitle>
-                      <CardDescription>Roll, Pitch, Yaw (degrees)</CardDescription>
+                      <CardDescription>Roll, Pitch, Yaw, Heading (degrees)</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       {telemetry?.attitude ? (
@@ -288,9 +296,24 @@ export default function TelemetryApp() {
                               <span className="text-2xl font-bold">{telemetry.attitude.yaw_deg.toFixed(1)}°</span>
                             </div>
                             <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
-                              <div 
+                              <div
                                 className="h-full bg-purple-500 transition-all"
                                 style={{ width: `${(telemetry.attitude.yaw_deg / 360) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-sm font-medium">Heading</span>
+                              <span className="text-2xl font-bold">
+                                {telemetry.heading_deg != null ? `${telemetry.heading_deg.toFixed(1)}°` : '—'}
+                              </span>
+                            </div>
+                            <div className="w-full bg-secondary h-2 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-orange-500 transition-all"
+                                style={{ width: `${((telemetry.heading_deg ?? 0) / 360) * 100}%` }}
                               />
                             </div>
                           </div>

@@ -21,6 +21,8 @@ interface CockpitHUDProps {
     remaining_percent: number;
   } | null;
   in_air: boolean;
+  /** Battery state-of-charge to display (e.g. average of the per-arm packs). Falls back to battery_fc. */
+  batterySoc?: number;
   heading?: number;
   airspeed_ms?: number;
   vertical_speed_ms?: number;
@@ -39,6 +41,7 @@ export function CockpitHUD({
   gps,
   battery_fc,
   in_air,
+  batterySoc,
   heading,
   airspeed_ms = 0,
   vertical_speed_ms = 0,
@@ -52,8 +55,16 @@ export function CockpitHUD({
   const hdg = heading ?? yaw;
   const sats = gps?.num_satellites ?? 0;
   const fixType = gps?.fix_type ?? 0;
-  const batPct = battery_fc?.remaining_percent ?? 0;
+  const batPct = batterySoc ?? battery_fc?.remaining_percent ?? 0;
   const batV = battery_fc?.voltage_v ?? 0;
+
+  // Top compass tape shows body-frame yaw (FC attitude); the dial (top-left)
+  // shows true heading. They can differ; both are 0–360°.
+  const dialCx = 146;
+  const dialCy = 84;
+  const dialR = 44;
+  const yawDisplay = Math.round(yaw < 0 ? yaw + 360 : yaw) % 360;
+  const hdgDisplay = Math.round(hdg < 0 ? hdg + 360 : hdg) % 360;
 
   const fixTypeLabel = useMemo(() => {
     const types = ['No Fix', '2D', '3D', 'DGPS', 'RTK Float', 'RTK Fixed'];
@@ -285,6 +296,7 @@ export function CockpitHUD({
 
         {/* ===== COMPASS / HEADING (top) ===== */}
         <g>
+          <text x="283" y="16" textAnchor="start" fill="#64748b" fontSize="9" fontFamily="monospace">YAW</text>
           <rect x="280" y="20" width="240" height="40" rx="4" fill="rgba(15,23,42,0.85)" stroke="#475569" strokeWidth="1" />
           {/* Compass tape */}
           <g clipPath="url(#compass-clip)">
@@ -294,7 +306,7 @@ export function CockpitHUD({
               </clipPath>
             </defs>
             {compassTicks.map(deg => {
-              let offset = deg - hdg;
+              let offset = deg - yaw;
               if (offset > 180) offset -= 360;
               if (offset < -180) offset += 360;
               const x = 400 + offset * 1.5;
@@ -326,10 +338,65 @@ export function CockpitHUD({
           </g>
           {/* Center pointer */}
           <polygon points="400,60 397,66 403,66" fill="#f97316" />
-          {/* Heading value box */}
+          {/* Yaw value box */}
           <rect x="380" y="62" width="40" height="18" rx="2" fill="rgba(0,0,0,0.8)" stroke="#f97316" strokeWidth="1" />
           <text x="400" y="76" textAnchor="middle" fill="white" fontSize="11" fontWeight="bold" fontFamily="monospace">
-            {Math.round(hdg < 0 ? hdg + 360 : hdg)}°
+            {yawDisplay}°
+          </text>
+        </g>
+
+        {/* ===== HEADING INDICATOR (top-left dial) ===== */}
+        <g>
+          <text x={dialCx} y={dialCy - dialR - 5} textAnchor="middle" fill="#94a3b8" fontSize="9" fontFamily="monospace">HDG</text>
+          <circle cx={dialCx} cy={dialCy} r={dialR} fill="rgba(15,23,42,0.85)" stroke="#475569" strokeWidth="1" />
+          {/* Tick marks every 30° */}
+          {Array.from({ length: 12 }, (_, i) => i * 30).map(deg => {
+            const rad = ((deg - 90) * Math.PI) / 180;
+            const major = deg % 90 === 0;
+            const r1 = dialR - 2;
+            const r2 = dialR - (major ? 11 : 6);
+            return (
+              <line
+                key={`hdg-tick-${deg}`}
+                x1={dialCx + r1 * Math.cos(rad)}
+                y1={dialCy + r1 * Math.sin(rad)}
+                x2={dialCx + r2 * Math.cos(rad)}
+                y2={dialCy + r2 * Math.sin(rad)}
+                stroke={major ? '#94a3b8' : '#475569'}
+                strokeWidth={major ? '1.5' : '1'}
+              />
+            );
+          })}
+          {/* Cardinal labels */}
+          {([[0, 'N'], [90, 'E'], [180, 'S'], [270, 'W']] as [number, string][]).map(([deg, l]) => {
+            const rad = ((deg - 90) * Math.PI) / 180;
+            const rr = dialR - 19;
+            return (
+              <text
+                key={`hdg-card-${deg}`}
+                x={dialCx + rr * Math.cos(rad)}
+                y={dialCy + rr * Math.sin(rad) + 3}
+                textAnchor="middle"
+                fill="#64748b"
+                fontSize="8"
+                fontFamily="monospace"
+              >
+                {l}
+              </text>
+            );
+          })}
+          {/* Rotating nose arrow at the current heading */}
+          <g transform={`rotate(${hdg} ${dialCx} ${dialCy})`}>
+            <polygon
+              points={`${dialCx},${dialCy - (dialR - 8)} ${dialCx - 7},${dialCy + 10} ${dialCx},${dialCy + 3} ${dialCx + 7},${dialCy + 10}`}
+              fill="#f97316"
+            />
+          </g>
+          <circle cx={dialCx} cy={dialCy} r="3" fill="#f97316" />
+          {/* Value readout */}
+          <rect x={dialCx - 20} y={dialCy + dialR + 3} width="40" height="16" rx="2" fill="rgba(0,0,0,0.8)" stroke="#f97316" strokeWidth="1" />
+          <text x={dialCx} y={dialCy + dialR + 15} textAnchor="middle" fill="white" fontSize="10" fontWeight="bold" fontFamily="monospace">
+            {hdgDisplay}°
           </text>
         </g>
 
